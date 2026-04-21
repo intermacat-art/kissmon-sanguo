@@ -279,6 +279,19 @@ addEventListener('keydown', e => {
   if (e.repeat) return;
   if (e.code === 'Escape') {
     e.preventDefault();
+    // 救命鍵：奧義卡住時按 ESC 強制清乾淨回 play
+    if (state === 'ult') {
+      console.warn('[ESC] rescue from ult freeze');
+      ultStartTime = 0;
+      ultPhase = null;
+      ultPhaseStart = 0;
+      ultExplosions = [];
+      document.getElementById('ult-img').style.display = 'none';
+      state = 'play';
+      last = performance.now();
+      if (bgm) { try { bgm.volume = 0.3; } catch(e){} }
+      return;
+    }
     if (state === 'play') {
       state = 'paused';
       pauseStart = performance.now();
