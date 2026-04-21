@@ -203,11 +203,11 @@ const SKILLS = {
               if (have === 0) { player.bbOrbR = 110; player.bbSize = 180; }
               else { player.bbOrbR *= 1.30; player.bbSize *= 1.20; }
             } },
-  kid:    { name:'親親子 靈氣', desc:'貼身隨從，自動向敵人射靈氣', max:3, weight:3,
+  kid:    { name:'親親子 靈氣', desc:'貼身隨從射靈氣；升級 +傷害 +發射數（最多 3 連發並排）', max:3, weight:3,
             apply: () => {
               const have = player.skills.kid || 0;
               if (have === 0) { player.kidShootInterval = 1500; player.kidShootDamage = 3; }
-              else { player.kidShootInterval *= 0.82; player.kidShootDamage += 2; }
+              else { player.kidShootInterval *= 0.88; player.kidShootDamage += 2; }
             } },
   pig:    { name:'豬鼻醬 守護', desc:'致命攻擊時擋 1 次並回滿血', max:2, weight:2, apply:()=>{ player.pigCharges++; } },
 };
@@ -1376,16 +1376,27 @@ function updateMinions(dt, now) {
         const dx = t.x - minionState.kidX;
         const dy = t.y - minionState.kidY;
         const d = Math.hypot(dx, dy) || 1;
+        const nx = dx / d, ny = dy / d;
+        // 垂直於飛行方向（順時針 90°）當作並排偏移軸
+        const px = -ny, py = nx;
+        const SPACING = 38;
         const speed = 620 * (player.projSpeedMul || 1);
-        projectiles.push({
-          x: minionState.kidX, y: minionState.kidY,
-          vx: (dx/d) * speed, vy: (dy/d) * speed,
-          life: 2400,
-          dmg: player.kidShootDamage || 3,
-          pierce: 99, r: 18,            // 穿透所有敵人
-          source: 'kid', hitIds: new Set(),
-          angle: Math.atan2(dy, dx), color: '#ffffff',
-        });
+        const count = Math.max(1, Math.min(3, player.skills.kid || 1));
+        const angle = Math.atan2(dy, dx);
+        for (let i = 0; i < count; i++) {
+          // count=1 → [0]; count=2 → [-0.5, 0.5]; count=3 → [-1, 0, 1]
+          const offset = (i - (count - 1) / 2) * SPACING;
+          projectiles.push({
+            x: minionState.kidX + px * offset,
+            y: minionState.kidY + py * offset,
+            vx: nx * speed, vy: ny * speed,
+            life: 2400,
+            dmg: player.kidShootDamage || 3,
+            pierce: 99, r: 18,
+            source: 'kid', hitIds: new Set(),
+            angle, color: '#ffffff',
+          });
+        }
         minionState.kidShootCooldown = player.kidShootInterval || 1500;
         playSfx('shoot', 0.45);
       }
