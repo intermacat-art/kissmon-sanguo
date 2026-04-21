@@ -68,6 +68,7 @@ const IMG_PATHS = {
   intro3:'a/intro/lv3.jpg',
   intro4:'a/intro/lv4.jpg',
   intro5:'a/intro/lv5.jpg',
+  final2:'a/final2.jpg',
 };
 const SFX_PATHS = {
   cut:'a/se/cut.aac', miss:'a/se/miss.aac', heal:'a/se/heal.aac',
@@ -146,7 +147,7 @@ const player = {
   xp: 0, level: 1, xpNeeded: 3,
   moveSpeed: 220,
   attackInterval: 900, attackCooldown: 0,
-  slashRange: 220,        // 近戰 AOE 半徑
+  slashRange: 264,        // 近戰 AOE 半徑（1.2x 起始範圍）
   slashDamage: 5,         // 近戰基礎傷害（較高）
   canisters: 0, maxCanisters: 2,
   iframeUntil: 0,
@@ -265,7 +266,7 @@ const LV = {
   },
   4: {
     enemyImg: 'lv4', enemyHp: 14, enemySpeed: 145, enemyDmg: 2, eliteRate: 0.20,
-    bossHp: 480, bossSpeed: 80, bossTime: 75, bossSkill: 'tripleJump',bossSkillInterval: 12000,
+    bossHp: 960, bossSpeed: 80, bossTime: 75, bossSkill: 'tripleJump',bossSkillInterval: 12000,
     spawnCfg: [
       { from: 0,  to: 22, interval: 1500, count: 1 },
       { from: 22, to: 50, interval: 1050, count: 2 },
@@ -274,7 +275,7 @@ const LV = {
   },
   5: {
     enemyImg: 'lv5', enemyHp: 20, enemySpeed: 155, enemyDmg: 2, eliteRate: 0.25,
-    bossHp: 770, bossSpeed: 82, bossTime: 80, bossSkill: 'mixed',     bossSkillInterval: 9000,
+    bossHp: 1540, bossSpeed: 82, bossTime: 80, bossSkill: 'mixed',     bossSkillInterval: 9000,
     spawnCfg: [
       { from: 0,  to: 25, interval: 1350, count: 2 },
       { from: 25, to: 55, interval: 950,  count: 2 },
@@ -748,8 +749,11 @@ function updateBoss(dt, now) {
 
 function beginBossSkill(now, skill) {
   if (skill === 'mixed') {
+    // L5 依序輪流使用前四關 BOSS 招式（不 random）
     const pool = ['jump', 'dash', 'summon', 'tripleJump'];
-    skill = pool[Math.floor(Math.random() * pool.length)];
+    const idx = boss.mixedIndex || 0;
+    skill = pool[idx % pool.length];
+    boss.mixedIndex = idx + 1;
   }
   if (skill === 'jump') {
     boss.ai = 'jumping';
@@ -1856,6 +1860,11 @@ function drawDead() {
 let transitionStart = 0;
 let levelIntroStart = 0;
 const LEVEL_INTRO_MS = 1200;
+let finalVictoryPhase = null;    // 'wait' (1s) | 'congrats' (3s FINAL2) | 'outro' (影片)
+let finalVictoryStart = 0;
+const FINAL_WAIT_MS = 1000;
+const FINAL_CONGRATS_MS = 3000;
+const FINAL_FADE_MS = 700;       // congrats 淡入/淡出時間
 
 function drawLevelIntro() {
   ctx.fillStyle = '#000';
@@ -1905,16 +1914,12 @@ function victory() {
   if (currentLevel >= 2) playSfx('vtdown', 0.9);
   if (currentLevel >= 5) {
     state = 'final_victory';
+    finalVictoryPhase = 'wait';       // wait 1s → congrats 3s → outro video
+    finalVictoryStart = performance.now();
     if (bgm) bgm.pause();
     spawnParticles(W/2, H/2, 120, '#ffd84d');
     playSfx('lvup', 1.0);
-    const vid = document.getElementById('outro');
-    if (vid) {
-      vid.style.display = 'block';
-      vid.currentTime = 0;
-      vid.volume = 1;
-      vid.play().catch(()=>{});
-    }
+    // 影片先不播（等 congrats phase 結束才觸發）
   } else {
     state = 'transition';
     transitionStart = performance.now();
@@ -1983,12 +1988,44 @@ function drawTransition() {
 }
 
 function drawFinalVictory() {
-  // 影片播放中，不畫任何 canvas overlay（video 在上層蓋住）
+  const now = performance.now();
+  const phaseT = now - finalVictoryStart;
+
+  if (finalVictoryPhase === 'wait') {
+    // 1 秒空等，讓戰鬥結束的瞬間多沉澱一下，不畫任何 overlay
+    return;
+  }
+
+  if (finalVictoryPhase === 'congrats') {
+    // 淡入 FINAL2.jpg（前 FINAL_FADE_MS 淡入，末尾 FINAL_FADE_MS 淡出讓銜接影片順）
+    let alpha = 1;
+    if (phaseT < FINAL_FADE_MS) {
+      alpha = phaseT / FINAL_FADE_MS;
+    } else if (phaseT > FINAL_CONGRATS_MS - FINAL_FADE_MS) {
+      alpha = Math.max(0, (FINAL_CONGRATS_MS - phaseT) / FINAL_FADE_MS);
+    }
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // 黑底
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    // 通關大圖（維持比例，適配到畫面）
+    const img = imgs.final2;
+    if (img && img.complete && img.naturalWidth) {
+      const scale = Math.min(W / img.naturalWidth, H / img.naturalHeight);
+      const dw = img.naturalWidth * scale;
+      const dh = img.naturalHeight * scale;
+      ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    }
+    ctx.restore();
+    return;
+  }
+
+  // outro 影片播放中：影片是 z-index 22 的 DOM 元素，canvas 不用畫東西
   const vid = document.getElementById('outro');
   const vidDone = !vid || vid.ended || (vid.duration && vid.currentTime >= vid.duration - 0.05);
   if (!vidDone) return;
   // 影片結束後，顯示「按 SPACE 回主選單」提示
-  const now = performance.now();
   const hintPulse = 0.55 + 0.45 * Math.sin(now / 280);
   ctx.save();
   ctx.globalAlpha = hintPulse;
@@ -2381,7 +2418,7 @@ function resetGame() {
   player.xp = 0; player.level = 1; player.xpNeeded = xpCurve(1);
   player.moveSpeed = 220;
   player.attackInterval = 900; player.attackCooldown = 0;
-  player.slashRange = 220; player.slashDamage = 5;
+  player.slashRange = 264; player.slashDamage = 5;
   player.canisters = 0; player.maxCanisters = 2;
   player.iframeUntil = 0;
   player.skills = {};
@@ -2426,6 +2463,8 @@ function goMenu() {
   const vid = document.getElementById('outro');
   if (vid) { vid.pause(); vid.style.display = 'none'; vid.currentTime = 0; }
   document.getElementById('ult-img').style.display = 'none';
+  finalVictoryPhase = null;
+  finalVictoryStart = 0;
 }
 
 // ============================================================================
@@ -2481,6 +2520,21 @@ function mainLoop(now) {
     if (pnow - transitionStart >= 1800) startNextLevel();
   } else if (state === 'final_victory') {
     updateParticles(dt);
+    const phaseT = pnow - finalVictoryStart;
+    if (finalVictoryPhase === 'wait' && phaseT >= FINAL_WAIT_MS) {
+      finalVictoryPhase = 'congrats';
+      finalVictoryStart = pnow;
+    } else if (finalVictoryPhase === 'congrats' && phaseT >= FINAL_CONGRATS_MS) {
+      finalVictoryPhase = 'outro';
+      finalVictoryStart = pnow;
+      const vid = document.getElementById('outro');
+      if (vid) {
+        vid.style.display = 'block';
+        vid.currentTime = 0;
+        vid.volume = 1;
+        vid.play().catch(()=>{});
+      }
+    }
   }
 
   if (state === 'loading') {
