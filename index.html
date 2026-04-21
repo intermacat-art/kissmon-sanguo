@@ -58,7 +58,11 @@ const IMG_PATHS = {
   drink:'a/mon/drink.png', smoke:'a/mon/smoke.gif',
   heart:'a/item/heart.png', can:'a/item/can.png',
   rrrr:'a/dead/rrrr.png',
-  lv1:'a/enemy/lv1.png',
+  lv1:'a/lv/lv1.png',
+  lv2:'a/lv/lv2.png',
+  lv3:'a/lv/lv3.png',
+  lv4:'a/lv/lv4.png',
+  lv5:'a/lv/lv5.png',
 };
 const SFX_PATHS = {
   cut:'a/se/cut.aac', miss:'a/se/miss.aac', heal:'a/se/heal.aac',
@@ -544,6 +548,10 @@ function updateBoss(dt, now) {
             fell: false,
           });
         }
+      } else {
+        // 跳躍動畫：快速飛到螢幕上方外（ease-in 加速）
+        const easedT = t * t;
+        boss.y = boss.jumpStartY - easedT * (boss.jumpStartY + 400);
       }
       break;
     }
@@ -1495,19 +1503,34 @@ const ULT_BOOM_MS = 800;
 
 function tryUlt() {
   if (player.canisters <= 0) return;
+  if (state !== 'play') return;   // 防禦
   player.canisters--;
   state = 'ult';
   ultStartTime = performance.now();
   ultPhase = 'intro';
   ultPhaseStart = ultStartTime;
-  // 鎖定此刻所有敵人位置 — 之後爆炸用
   ultExplosions = [];
   for (const e of enemies) ultExplosions.push({ x: e.x, y: e.y });
   if (boss && bossVulnerable()) ultExplosions.push({ x: boss.x, y: boss.y, isBoss: true });
-  // Phase 1：顯示 Eason 照片 + 播音效
   document.getElementById('ult-img').style.display = 'block';
   playSfx('ult', 1.0);
   if (bgm) bgm.volume = 0.05;
+  // 用 setTimeout 保證時序一定推進（不依賴 mainLoop dt 邏輯）
+  setTimeout(() => {
+    if (state !== 'ult') return;
+    document.getElementById('ult-img').style.display = 'none';
+    ultPhase = 'freeze';
+    ultPhaseStart = performance.now();
+    setTimeout(() => {
+      if (state !== 'ult') return;
+      ultPhase = 'boom';
+      ultPhaseStart = performance.now();
+      setTimeout(() => {
+        if (state !== 'ult') return;
+        finishUltScreen();
+      }, ULT_BOOM_MS);
+    }, ULT_FREEZE_MS);
+  }, ULT_INTRO_MS);
 }
 
 function drawUltEffect() {
@@ -1998,8 +2021,8 @@ function drawGame() {
   for (const p of pickups) drawPickup(p);
   drawDeathAnims();
   for (const e of enemies) drawEnemy(e);
-  // BOSS 視覺：只在 chase / dashWarn / dashing 時在場上顯示（jumping/shadow/summoning 隱藏）
-  if (boss && (boss.ai === 'chase' || boss.ai === 'dashWarn' || boss.ai === 'dashing')) {
+  // BOSS 視覺：chase / dash / jumping 時畫（shadow/summoning 隱藏因為飛出螢幕或隱身）
+  if (boss && (boss.ai === 'chase' || boss.ai === 'dashWarn' || boss.ai === 'dashing' || boss.ai === 'jumping')) {
     drawEnemy(boss);
   }
   drawShadows();
@@ -2144,17 +2167,7 @@ function mainLoop(now) {
     updateDying(dt, pnow);
     updateParticles(dt);
   } else if (state === 'ult') {
-    const pt = pnow - ultPhaseStart;
-    if (ultPhase === 'intro' && pt >= ULT_INTRO_MS) {
-      document.getElementById('ult-img').style.display = 'none';
-      ultPhase = 'freeze';
-      ultPhaseStart = pnow;
-    } else if (ultPhase === 'freeze' && pt >= ULT_FREEZE_MS) {
-      ultPhase = 'boom';
-      ultPhaseStart = pnow;
-    } else if (ultPhase === 'boom' && pt >= ULT_BOOM_MS) {
-      finishUltScreen();
-    }
+    // phase 推進由 setTimeout 在 tryUlt 處理，此處只繪製
   } else if (state === 'levelup' || state === 'passivePick') {
     gameStartTime += dt;
     lastSpawn += dt;
