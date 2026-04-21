@@ -123,13 +123,16 @@ const player = {
   animUntil: 0,
   animType: null,
   pigCharges: 0,
-  bbOrbR: 110,            // 波貝貝繞體半徑
-  bbSize: 180,            // 波貝貝顯示尺寸（寬高基底）
-  kidShootInterval: 1500, // 親親子射擊間隔 ms
-  kidShootDamage: 3,      // 親親子靈氣傷害
-  slashVisualUntil: 0,    // 靈氣特效結束時間
+  bbOrbR: 110,
+  bbSize: 180,
+  kidShootInterval: 1500,
+  kidShootDamage: 3,
+  slashVisualUntil: 0,
   slashVisualAngle: 0,
   skills: {},
+  passives: {},
+  armor: 0,
+  projSpeedMul: 1,
 };
 
 let enemies = [];
@@ -175,6 +178,24 @@ const SKILLS = {
             } },
   pig:    { name:'豬鼻醬 守護', desc:'致命攻擊時擋 1 次並回滿血', max:2, weight:2, apply:()=>{ player.pigCharges++; } },
 };
+
+// 被動道具 — 由小怪掉落的寶箱開啟後三選一
+const PASSIVES = {
+  maxHp: { name:'強健體魄', desc:'血上限 +2（並回滿）',       max:5,
+           apply: () => { player.maxHp += 2; player.hp = player.maxHp; } },
+  move:  { name:'飛毛靴',   desc:'移動速度 +10%',            max:5,
+           apply: () => { player.moveSpeed *= 1.10; } },
+  atk:   { name:'急風紙扇', desc:'所有攻速 +10%',            max:5,
+           apply: () => {
+             player.attackInterval *= 0.90;
+             if (player.kidShootInterval) player.kidShootInterval *= 0.90;
+           } },
+  proj:  { name:'銳利剪尖', desc:'投射物速度 +20%',          max:3,
+           apply: () => { player.projSpeedMul = (player.projSpeedMul || 1) * 1.20; } },
+  armor: { name:'紙鎧護身', desc:'受到傷害 -1（底線 1）',    max:3,
+           apply: () => { player.armor = (player.armor || 0) + 1; } },
+};
+let passivePicks = [];
 
 const LV = {
   1: {
@@ -291,29 +312,35 @@ addEventListener('keydown', e => {
     e.preventDefault();
     if (state === 'menu') startGame();
     else if (state === 'play') tryUlt();
-    else if (state === 'dead' || state === 'victory') goMenu();
+    else if (state === 'dead' || state === 'victory' || state === 'final_victory') goMenu();
   } else if (state === 'levelup') {
     if (e.code === 'Digit1' || e.code === 'Numpad1') chooseSkill(levelUpChoices[0]);
     else if (e.code === 'Digit2' || e.code === 'Numpad2') { if (levelUpChoices[1]) chooseSkill(levelUpChoices[1]); }
     else if (e.code === 'Digit3' || e.code === 'Numpad3') { if (levelUpChoices[2]) chooseSkill(levelUpChoices[2]); }
+  } else if (state === 'passivePick') {
+    if (e.code === 'Digit1' || e.code === 'Numpad1') choosePassive(passivePicks[0]);
+    else if (e.code === 'Digit2' || e.code === 'Numpad2') { if (passivePicks[1]) choosePassive(passivePicks[1]); }
+    else if (e.code === 'Digit3' || e.code === 'Numpad3') { if (passivePicks[2]) choosePassive(passivePicks[2]); }
   }
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 
 CANVAS.addEventListener('click', e => {
   tryPlayMenuBgm();
-  if (state !== 'levelup') return;
+  if (state !== 'levelup' && state !== 'passivePick') return;
   const rect = CANVAS.getBoundingClientRect();
   const mx = (e.clientX - rect.left) * (W / rect.width);
   const my = (e.clientY - rect.top) * (H / rect.height);
   const cardW = 310, cardH = 330, gap = 40;
   const totalW = cardW * 3 + gap * 2;
   const startX = (W - totalW) / 2;
-  const cy = 240;
-  for (let i = 0; i < levelUpChoices.length; i++) {
+  const cy = state === 'passivePick' ? 230 : 240;
+  const picks = state === 'levelup' ? levelUpChoices : passivePicks;
+  const pickFn = state === 'levelup' ? chooseSkill : choosePassive;
+  for (let i = 0; i < picks.length; i++) {
     const cx = startX + i * (cardW + gap);
     if (mx >= cx && mx <= cx + cardW && my >= cy && my <= cy + cardH) {
-      chooseSkill(levelUpChoices[i]);
+      pickFn(picks[i]);
       return;
     }
   }
@@ -846,6 +873,7 @@ function dropXp(x, y, amount = 1) {
 function dropHeart(x, y)  { pickups.push({ type:'heart',  x, y, r:22, vx:0, vy:0 }); }
 function dropCan(x, y)    { pickups.push({ type:'can',    x, y, r:24, vx:0, vy:0 }); }
 function dropMagnet(x, y) { pickups.push({ type:'magnet', x, y, r:26, vx:0, vy:0 }); }
+function dropChest(x, y)  { pickups.push({ type:'chest',  x, y, r:32, vx:0, vy:0 }); }
 
 function updatePickups(dt) {
   const MAGNET = 110;
@@ -897,13 +925,47 @@ function onPickup(p) {
     player.animUntil = performance.now() + 650;
     player.animType = 'smoke';
   } else if (p.type === 'magnet') {
-    // 磁鐵：場上所有 XP 標記 magnetized → updatePickups 會強力拉向玩家
     for (const pp of pickups) {
       if (pp.type === 'xp' && !pp.picked) pp.magnetized = true;
     }
     playSfx('magnet', 1.0);
     spawnParticles(player.x, player.y, 30, '#3cf');
+  } else if (p.type === 'chest') {
+    openChest();
   }
+}
+
+function openChest() {
+  state = 'passivePick';
+  passivePicks = pickPassiveChoices(3);
+  if (bgm) bgm.volume = 0.1;
+  playSfx('lvup', 0.85);
+  spawnParticles(player.x, player.y, 30, '#ffd84d');
+}
+
+function pickPassiveChoices(n) {
+  const bucket = [];
+  for (const k in PASSIVES) {
+    const have = (player.passives && player.passives[k]) || 0;
+    if (have < PASSIVES[k].max) bucket.push(k);
+  }
+  const picked = [];
+  while (picked.length < n && bucket.length > 0) {
+    const idx = Math.floor(Math.random() * bucket.length);
+    picked.push(bucket[idx]);
+    bucket.splice(idx, 1);
+  }
+  return picked;
+}
+
+function choosePassive(k) {
+  if (!k) return;
+  PASSIVES[k].apply();
+  if (!player.passives) player.passives = {};
+  player.passives[k] = (player.passives[k] || 0) + 1;
+  spawnParticles(player.x, player.y, 25, '#3cf');
+  state = 'play';
+  if (bgm) bgm.volume = 0.3;
 }
 
 function drawPickup(p) {
@@ -961,6 +1023,38 @@ function drawPickup(p) {
     ctx.fillText('S',  s/2 - s*0.11, s/3 + s*0.08);
     ctx.restore();
     ctx.textBaseline = 'alphabetic';
+  } else if (p.type === 'chest') {
+    const now = performance.now();
+    const pulse = Math.sin(now / 180) * 0.1 + 1;
+    const s = 68 * pulse;
+    ctx.save();
+    ctx.shadowColor = '#ffd84d'; ctx.shadowBlur = 26;
+    ctx.translate(p.x, p.y);
+    ctx.rotate(Math.sin(now / 400) * 0.06);
+    // 箱身（棕色）
+    ctx.fillStyle = '#8B4513';
+    ctx.fillRect(-s/2, -s*0.22, s, s*0.55);
+    // 箱蓋
+    ctx.fillStyle = '#6B3410';
+    ctx.fillRect(-s/2, -s*0.35, s, s*0.15);
+    // 金邊
+    ctx.strokeStyle = '#ffd84d';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(-s/2, -s*0.35, s, s*0.68);
+    ctx.strokeStyle = '#ffd84d';
+    ctx.beginPath();
+    ctx.moveTo(-s/2, -s*0.2); ctx.lineTo(s/2, -s*0.2);
+    ctx.stroke();
+    // 中央鎖 + ★
+    ctx.fillStyle = '#ffd84d';
+    ctx.fillRect(-s*0.12, -s*0.18, s*0.24, s*0.2);
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${Math.floor(s*0.24)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('★', 0, -s*0.08);
+    ctx.textBaseline = 'alphabetic';
+    ctx.restore();
   }
 }
 
@@ -1084,7 +1178,7 @@ function updateMinions(dt, now) {
         const dx = t.x - minionState.kidX;
         const dy = t.y - minionState.kidY;
         const d = Math.hypot(dx, dy) || 1;
-        const speed = 620;
+        const speed = 620 * (player.projSpeedMul || 1);
         projectiles.push({
           x: minionState.kidX, y: minionState.kidY,
           vx: (dx/d) * speed, vy: (dy/d) * speed,
@@ -1191,7 +1285,8 @@ function onEnemyKill(e) {
   const r = Math.random();
   if (r < 0.04)      dropHeart(e.x, e.y);
   else if (r < 0.08) dropCan(e.x, e.y);
-  else if (r < 0.12) dropMagnet(e.x, e.y);
+  else if (r < 0.11) dropMagnet(e.x, e.y);
+  else if (r < 0.14) dropChest(e.x, e.y);
   else               dropXp(e.x, e.y, e.xpDrop || 1);
   spawnParticles(e.x, e.y, 8, '#ffee7a');
   // 紙片切半動畫
@@ -1264,6 +1359,8 @@ function drawHitFx() {
 
 function hurtPlayer(dmg, now) {
   if (state !== 'play') return;
+  // armor 減傷（底線 1）
+  dmg = Math.max(1, dmg - (player.armor || 0));
   // 豬鼻醬 save: any hit that would kill
   if (player.hp - dmg <= 0 && player.pigCharges > 0) {
     player.pigCharges--;
@@ -1463,10 +1560,114 @@ function drawDead() {
   ctx.fillText('按 SPACE 重新開始', W/2, H - 60);
 }
 
+let transitionStart = 0;
+
 function victory() {
-  state = 'victory';
-  if (bgm) bgm.pause();
-  spawnParticles(W/2, H/2, 80, '#ffd84d');
+  if (currentLevel >= 5) {
+    state = 'final_victory';
+    if (bgm) bgm.pause();
+    spawnParticles(W/2, H/2, 120, '#ffd84d');
+    playSfx('lvup', 1.0);
+  } else {
+    state = 'transition';
+    transitionStart = performance.now();
+    spawnParticles(W/2, H/2, 80, '#ffd84d');
+    playSfx('lvup', 1.0);
+  }
+}
+
+function startNextLevel() {
+  currentLevel++;
+  enemies = []; projectiles = []; pickups = []; particles = [];
+  deathAnims = []; hitFx = []; slashHits = []; ultExplosions = [];
+  boss = null; bossSpawned = false;
+  ultPhase = null;
+  // 角色回滿血 + 歸中 + 清 iframe，技能/等級/XP/罐頭保留
+  player.hp = player.maxHp;
+  player.x = W/2; player.y = H/2;
+  player.iframeUntil = 0;
+  player.slashVisualUntil = 0;
+  gameStartTime = performance.now();
+  elapsed = 0;
+  lastSpawn = 0;
+  lastPickupSpawn = performance.now();
+  minionState.bbCooldown = 0; minionState.bbAngle = 0;
+  minionState.kidFloat = 0; minionState.kidCooldown = 0; minionState.kidShootCooldown = 0;
+  state = 'play';
+  if (bgm) { bgm.currentTime = 0; bgm.play().catch(()=>{}); }
+}
+
+function drawTransition() {
+  const now = performance.now();
+  const t = Math.min(1, (now - transitionStart) / 1800);
+  // 黑色 overlay 漸入
+  ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(0.88, t * 1.5)})`;
+  ctx.fillRect(0, 0, W, H);
+  const alpha = Math.min(1, t * 2);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // 大字
+  const pulse = 1 + Math.sin((now - transitionStart) / 180) * 0.04;
+  ctx.fillStyle = '#ffd84d';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 12;
+  ctx.font = `bold ${Math.floor(150 * pulse)}px "Microsoft JhengHei"`;
+  ctx.strokeText(`LEVEL ${currentLevel + 1}`, W/2, H/2 - 40);
+  ctx.fillText(`LEVEL ${currentLevel + 1}`, W/2, H/2 - 40);
+  // 副標
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+  ctx.lineWidth = 5;
+  ctx.font = 'bold 38px "Microsoft JhengHei"';
+  ctx.strokeText('新的敵手 正在逼近...', W/2, H/2 + 70);
+  ctx.fillText('新的敵手 正在逼近...', W/2, H/2 + 70);
+  ctx.restore();
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawFinalVictory() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.92)';
+  ctx.fillRect(0, 0, W, H);
+  const now = performance.now();
+  const pulse = 0.9 + Math.sin(now / 400) * 0.1;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // 煙火粒子光
+  const g = ctx.createRadialGradient(W/2, H/2, 30, W/2, H/2, 600);
+  g.addColorStop(0, 'rgba(255, 215, 80, 0.25)');
+  g.addColorStop(1, 'rgba(255, 215, 80, 0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  // 主標
+  ctx.save();
+  ctx.fillStyle = '#ffd84d';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 12;
+  ctx.font = `bold ${Math.floor(140 * pulse)}px "Microsoft JhengHei"`;
+  ctx.strokeText('感 謝 試 玩', W/2, H/2 - 130);
+  ctx.fillText('感 謝 試 玩', W/2, H/2 - 130);
+  ctx.restore();
+  // 副標（秋季上市）
+  ctx.fillStyle = '#ff8b6a';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 6;
+  ctx.font = 'bold 58px "Microsoft JhengHei"';
+  ctx.strokeText('預計今年秋季上市 SWITCH', W/2, H/2 + 10);
+  ctx.fillText('預計今年秋季上市 SWITCH', W/2, H/2 + 10);
+  // 成績
+  ctx.fillStyle = '#cde';
+  ctx.font = 'bold 28px "Microsoft JhengHei"';
+  ctx.fillText(`擊殺 ${killCount}  ·  最終 Lv ${player.level}  ·  最後一關 ${elapsed.toFixed(1)}s`, W/2, H/2 + 110);
+  // 提示
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 30px "Microsoft JhengHei"';
+  const hintPulse = 0.55 + 0.45 * Math.sin(now / 280);
+  ctx.globalAlpha = hintPulse;
+  ctx.fillText('按 SPACE 回主選單', W/2, H/2 + 190);
+  ctx.globalAlpha = 1;
+  ctx.textBaseline = 'alphabetic';
 }
 
 function drawVictory() {
@@ -1545,6 +1746,49 @@ function drawMenu() {
 // ============================================================================
 // Level up modal
 // ============================================================================
+function drawPassivePick() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.82)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#3cf';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 5;
+  ctx.font = 'bold 62px "Microsoft JhengHei"';
+  ctx.strokeText('★ 寶箱開啟 ★', W/2, 110);
+  ctx.fillText('★ 寶箱開啟 ★', W/2, 110);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 28px "Microsoft JhengHei"';
+  ctx.fillText('選擇一項被動強化（點卡片 或 按 1/2/3）', W/2, 165);
+
+  const cardW = 310, cardH = 330, gap = 40;
+  const totalW = cardW * 3 + gap * 2;
+  const startX = (W - totalW) / 2;
+  const cy = 230;
+  for (let i = 0; i < passivePicks.length; i++) {
+    const k = passivePicks[i];
+    const s = PASSIVES[k];
+    const cx = startX + i * (cardW + gap);
+    ctx.fillStyle = 'rgba(20, 40, 70, 0.95)';
+    ctx.fillRect(cx, cy, cardW, cardH);
+    ctx.strokeStyle = '#3cf';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(cx, cy, cardW, cardH);
+    ctx.fillStyle = '#3cf';
+    ctx.font = 'bold 36px "Microsoft JhengHei"';
+    ctx.fillText(s.name, cx + cardW/2, cy + 70);
+    const have = (player.passives && player.passives[k]) || 0;
+    ctx.fillStyle = '#aef';
+    ctx.font = 'bold 22px "Microsoft JhengHei"';
+    ctx.fillText(`等級 ${have}/${s.max}  →  ${have + 1}`, cx + cardW/2, cy + 110);
+    ctx.fillStyle = '#fff';
+    ctx.font = '24px "Microsoft JhengHei"';
+    ctx.fillText(s.desc, cx + cardW/2, cy + 180);
+    ctx.fillStyle = '#3cf';
+    ctx.font = 'bold 52px "Courier New"';
+    ctx.fillText(`[${i+1}]`, cx + cardW/2, cy + cardH - 40);
+  }
+}
+
 function drawLevelUp() {
   ctx.fillStyle = 'rgba(0,0,0,0.78)';
   ctx.fillRect(0, 0, W, H);
@@ -1787,6 +2031,10 @@ function resetGame() {
   player.slashVisualUntil = 0;
   player.animUntil = 0;
   player.animType = null;
+  player.passives = {};
+  player.armor = 0;
+  player.projSpeedMul = 1;
+  currentLevel = 1;
   enemies = []; projectiles = []; pickups = []; particles = [];
   deathAnims = []; hitFx = []; slashHits = []; ultExplosions = [];
   boss = null; bossSpawned = false;
@@ -1845,10 +2093,15 @@ function mainLoop(now) {
     } else if (ultPhase === 'boom' && pt >= ULT_BOOM_MS) {
       finishUltScreen();
     }
-  } else if (state === 'levelup') {
-    gameStartTime += dt;       // freeze elapsed
+  } else if (state === 'levelup' || state === 'passivePick') {
+    gameStartTime += dt;
     lastSpawn += dt;
     lastPickupSpawn += dt;
+    updateParticles(dt);
+  } else if (state === 'transition') {
+    updateParticles(dt);
+    if (pnow - transitionStart >= 1800) startNextLevel();
+  } else if (state === 'final_victory') {
     updateParticles(dt);
   }
 
@@ -1856,16 +2109,21 @@ function mainLoop(now) {
     // loading overlay handles visual
   } else if (state === 'menu') {
     drawMenu();
-  } else if (state === 'play' || state === 'levelup' || state === 'ult' || state === 'dying' || state === 'paused') {
+  } else if (state === 'play' || state === 'levelup' || state === 'ult' || state === 'dying' || state === 'paused' || state === 'passivePick' || state === 'transition') {
     drawGame();
     if (state === 'levelup') drawLevelUp();
+    if (state === 'passivePick') drawPassivePick();
     if (state === 'dying') drawDyingOverlay();
     if (state === 'paused') drawPauseOverlay();
+    if (state === 'transition') drawTransition();
   } else if (state === 'dead') {
     drawDead();
   } else if (state === 'victory') {
     drawGame();
     drawVictory();
+  } else if (state === 'final_victory') {
+    drawGame();
+    drawFinalVictory();
   }
 
   syncMinions(pnow);
