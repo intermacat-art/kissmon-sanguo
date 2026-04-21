@@ -63,6 +63,11 @@ const IMG_PATHS = {
   lv3:'a/lv/lv3.png',
   lv4:'a/lv/lv4.png',
   lv5:'a/lv/lv5.png',
+  intro1:'a/intro/lv1.jpg',
+  intro2:'a/intro/lv2.jpg',
+  intro3:'a/intro/lv3.jpg',
+  intro4:'a/intro/lv4.jpg',
+  intro5:'a/intro/lv5.jpg',
 };
 const SFX_PATHS = {
   cut:'a/se/cut.aac', miss:'a/se/miss.aac', heal:'a/se/heal.aac',
@@ -463,7 +468,8 @@ function spawnEnemy(isBoss = false) {
       w: 260, h: 260,
       dmg: 2, hitFlash: 0,
       ai: 'chase',
-      lastSkillAt: performance.now(),
+      // 出場 1 秒後立刻用招（lastSkillAt 往前調 (interval - 1000)）
+      lastSkillAt: performance.now() - (cfg.bossSkillInterval || 12000) + 1000,
       shadows: [],
     };
     bossSpawned = true;
@@ -1422,7 +1428,12 @@ function updateSpawner(dt, now) {
     }
     if (wave && now - lastSpawn > wave.interval) {
       lastSpawn = now;
-      for (let i = 0; i < wave.count; i++) spawnEnemy();
+      // 場上敵人數量上限，防 LAG。BOSS 不算在內。
+      const MAX_ON_SCREEN = 35;
+      for (let i = 0; i < wave.count; i++) {
+        if (enemies.length >= MAX_ON_SCREEN) break;
+        spawnEnemy();
+      }
     }
   }
   if (now - lastPickupSpawn > 22000) {
@@ -1535,7 +1546,7 @@ function hurtPlayer(dmg, now) {
     return;
   }
   player.hp -= dmg;
-  player.iframeUntil = now + 800;
+  player.iframeUntil = now + 1200;   // 一次受傷後 1.2s 無敵，避免群體包圍瞬殺
   spawnHeartLose();
   playSfx('miss', 0.7);
   if (player.hp <= 0) { player.hp = 0; startDying(now); }
@@ -1754,6 +1765,51 @@ function drawDead() {
 }
 
 let transitionStart = 0;
+let levelIntroStart = 0;
+const LEVEL_INTRO_MS = 1200;
+
+function drawLevelIntro() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  const img = imgs['intro' + currentLevel];
+  if (img && img.complete && img.naturalWidth) {
+    // 以 60% 畫面高為基準，保持比例置中
+    const maxH = H * 0.6;
+    const maxW = W * 0.55;
+    const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight);
+    const w = img.naturalWidth * scale;
+    const h = img.naturalHeight * scale;
+    ctx.drawImage(img, (W - w) / 2, (H - h) / 2 - 30, w, h);
+  }
+  // 標題
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffd84d';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 9;
+  ctx.font = 'bold 88px "Microsoft JhengHei"';
+  ctx.strokeText(`LEVEL ${currentLevel}`, W / 2, 80);
+  ctx.fillText(`LEVEL ${currentLevel}`, W / 2, 80);
+  // 底部提示
+  const t = (performance.now() - levelIntroStart) / LEVEL_INTRO_MS;
+  ctx.globalAlpha = Math.min(1, t * 2);
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+  ctx.lineWidth = 4;
+  ctx.font = 'bold 30px "Microsoft JhengHei"';
+  ctx.strokeText('準備戰鬥...', W / 2, H - 60);
+  ctx.fillText('準備戰鬥...', W / 2, H - 60);
+  ctx.globalAlpha = 1;
+  ctx.textBaseline = 'alphabetic';
+}
+
+function enterLevelIntro() {
+  state = 'levelIntro';
+  levelIntroStart = performance.now();
+  setTimeout(() => {
+    if (state === 'levelIntro') state = 'play';
+  }, LEVEL_INTRO_MS);
+}
 
 function victory() {
   // L2+ 倒地音效
@@ -1803,8 +1859,8 @@ function startNextLevel() {
   lastPickupSpawn = performance.now();
   minionState.bbCooldown = 0; minionState.bbAngle = 0;
   minionState.kidFloat = 0; minionState.kidCooldown = 0; minionState.kidShootCooldown = 0;
-  state = 'play';
   if (bgm) { bgm.currentTime = 0; bgm.play().catch(()=>{}); }
+  enterLevelIntro();
 }
 
 function drawTransition() {
@@ -2224,9 +2280,9 @@ function drawPauseOverlay() {
 // ============================================================================
 function startGame() {
   resetGame();
-  state = 'play';
   if (menuBgm) menuBgm.pause();
   if (bgm) { bgm.currentTime = 0; bgm.play().catch(()=>{}); }
+  enterLevelIntro();
 }
 
 function resetGame() {
@@ -2324,7 +2380,7 @@ function mainLoop(now) {
       console.warn('Ult timeout fallback triggered');
       finishUltScreen();
     }
-  } else if (state === 'levelup' || state === 'passivePick') {
+  } else if (state === 'levelup' || state === 'passivePick' || state === 'levelIntro') {
     gameStartTime += dt;
     lastSpawn += dt;
     lastPickupSpawn += dt;
@@ -2340,6 +2396,8 @@ function mainLoop(now) {
     // loading overlay handles visual
   } else if (state === 'menu') {
     drawMenu();
+  } else if (state === 'levelIntro') {
+    drawLevelIntro();
   } else if (state === 'play' || state === 'levelup' || state === 'ult' || state === 'dying' || state === 'paused' || state === 'passivePick' || state === 'transition') {
     drawGame();
     if (state === 'levelup') drawLevelUp();
