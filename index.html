@@ -70,7 +70,9 @@ const SFX_PATHS = {
   coin:'a/se/coin.mp3', lvup:'a/se/LVUP.mp3',
   die:'a/se/enemy_die.mp3',
   shoot:'a/se/shoot.mp3',
-  magnet:'a/se/coin.mp3',   // 沿用 coin 當暫代磁鐵拾取音
+  magnet:'a/se/coin.mp3',
+  girlhurt:'a/se/girlhurt.mp3',   // L2+ boss 受傷
+  vtdown:'a/se/vtdown.mp3',       // L2+ boss 倒地
 };
 const BGM_SRC = 'a/bgm/bgm.mp3';
 const MENU_BGM_SRC = 'a/bgm/menu.mp3';
@@ -568,6 +570,15 @@ function allTargets() {
 
 function updateBoss(dt, now) {
   if (!boss) return;
+  // 偵測 hitFlash 剛被設（= 剛受傷），L2+ 播 girlhurt（防 spam：至少 200ms 間隔）
+  const hitNow = boss.hitFlash > 120;
+  if (currentLevel >= 2 && hitNow && !boss._hitFlashPrev) {
+    if (!boss.lastHurtSfx || now - boss.lastHurtSfx > 200) {
+      playSfx('girlhurt', 0.55);
+      boss.lastHurtSfx = now;
+    }
+  }
+  boss._hitFlashPrev = hitNow;
   if (boss.hitFlash > 0) boss.hitFlash -= dt;
 
   switch (boss.ai) {
@@ -1743,6 +1754,8 @@ function drawDead() {
 let transitionStart = 0;
 
 function victory() {
+  // L2+ 倒地音效
+  if (currentLevel >= 2) playSfx('vtdown', 0.9);
   if (currentLevel >= 5) {
     state = 'final_victory';
     if (bgm) bgm.pause();
