@@ -383,7 +383,23 @@ addEventListener('keydown', e => {
     e.preventDefault();
     if (state === 'menu') startGame();
     else if (state === 'play') tryUlt();
-    else if (state === 'dead' || state === 'victory' || state === 'final_victory') goMenu();
+    else if (state === 'final_victory') {
+      // congrats 階段按 SPACE 直接跳進 outro 影片；outro/wait 按 SPACE 就回主選單
+      if (finalVictoryPhase === 'congrats') {
+        finalVictoryPhase = 'outro';
+        finalVictoryStart = performance.now();
+        const vid = document.getElementById('outro');
+        if (vid) {
+          vid.style.display = 'block';
+          vid.currentTime = 0;
+          vid.volume = 1;
+          vid.play().catch(()=>{});
+        }
+      } else {
+        goMenu();
+      }
+    }
+    else if (state === 'dead' || state === 'victory') goMenu();
   } else if (state === 'levelup') {
     if (e.code === 'Digit1' || e.code === 'Numpad1') chooseSkill(levelUpChoices[0]);
     else if (e.code === 'Digit2' || e.code === 'Numpad2') { if (levelUpChoices[1]) chooseSkill(levelUpChoices[1]); }
@@ -2390,6 +2406,22 @@ function drawFinalVictory() {
       ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
     }
     ctx.restore();
+    // 按 SPACE 跳過到結束動畫的提示（圖淡入完才開始顯示）
+    if (phaseT > FINAL_FADE_MS) {
+      const hintPulse = 0.55 + 0.45 * Math.sin(now / 280);
+      ctx.save();
+      ctx.globalAlpha = hintPulse;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 5;
+      ctx.font = 'bold 32px "Microsoft JhengHei"';
+      ctx.strokeText('按 SPACE 進入結束動畫', W/2, H - 50);
+      ctx.fillText('按 SPACE 進入結束動畫', W/2, H - 50);
+      ctx.restore();
+      ctx.textBaseline = 'alphabetic';
+    }
     return;
   }
 
