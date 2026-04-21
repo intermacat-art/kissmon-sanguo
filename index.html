@@ -1658,10 +1658,12 @@ function drawUltEffect() {
   const t = now - ultPhaseStart;
   if (ultPhase === 'freeze') {
     // Phase2：畫面凍結，金色光暈脈動 1s
-    const k = Math.sin((t / ULT_FREEZE_MS) * Math.PI);
+    // clamp: t > ULT_FREEZE_MS 時 sin 會變負 → createRadialGradient r1<0 會拋 IndexSizeError
+    const k = Math.max(0, Math.sin((Math.min(t, ULT_FREEZE_MS) / ULT_FREEZE_MS) * Math.PI));
     ctx.fillStyle = `rgba(255, 240, 140, ${k * 0.45})`;
     ctx.fillRect(0, 0, W, H);
-    const g = ctx.createRadialGradient(player.x, player.y, 20, player.x, player.y, 600 * k);
+    const r1 = Math.max(25, 600 * k);   // 至少 25 避免 r1<=0 crash
+    const g = ctx.createRadialGradient(player.x, player.y, 20, player.x, player.y, r1);
     g.addColorStop(0, `rgba(255, 230, 100, ${0.7 * k})`);
     g.addColorStop(1, 'rgba(255, 230, 100, 0)');
     ctx.fillStyle = g;
@@ -2284,6 +2286,7 @@ function goMenu() {
 // Main loop
 // ============================================================================
 function mainLoop(now) {
+  try {
   const dt = Math.min(50, now - last);
   last = now;
   const pnow = performance.now();
@@ -2354,8 +2357,10 @@ function mainLoop(now) {
     drawFinalVictory();
   }
 
-  syncMinions(pnow);
-
+  try { syncMinions(pnow); } catch(e) { console.error('[syncMinions]', e); }
+  } catch (e) {
+    console.error('[mainLoop] caught exception, continuing next frame', e);
+  }
   requestAnimationFrame(mainLoop);
 }
 
