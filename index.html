@@ -76,8 +76,9 @@ const SFX_PATHS = {
   die:'a/se/enemy_die.mp3',
   shoot:'a/se/shoot.mp3',
   magnet:'a/se/coin.mp3',
-  girlhurt:'a/se/girlhurt.mp3',   // L2+ boss 受傷
-  vtdown:'a/se/vtdown.mp3',       // L2+ boss 倒地
+  girlhurt:'a/se/girlhurt.mp3',
+  vtdown:'a/se/vtdown.mp3',
+  explode:'a/se/explode.mp3',     // L1/L4 泰山壓頂黑影落地
 };
 const BGM_SRC = 'a/bgm/bgm.mp3';
 const MENU_BGM_SRC = 'a/bgm/menu.mp3';
@@ -262,21 +263,21 @@ const LV = {
     ],
   },
   4: {
-    enemyImg: 'lv4', enemyHp: 16, enemySpeed: 155, enemyDmg: 2, eliteRate: 0.25,
-    bossHp: 560, bossSpeed: 82, bossTime: 75, bossSkill: 'tripleJump',bossSkillInterval: 11000,
+    enemyImg: 'lv4', enemyHp: 14, enemySpeed: 145, enemyDmg: 2, eliteRate: 0.20,
+    bossHp: 480, bossSpeed: 80, bossTime: 75, bossSkill: 'tripleJump',bossSkillInterval: 12000,
     spawnCfg: [
-      { from: 0,  to: 22, interval: 1400, count: 1 },
-      { from: 22, to: 50, interval: 950,  count: 2 },
-      { from: 50, to: 75, interval: 700,  count: 3 },
+      { from: 0,  to: 22, interval: 1500, count: 1 },
+      { from: 22, to: 50, interval: 1050, count: 2 },
+      { from: 50, to: 75, interval: 800,  count: 2 },
     ],
   },
   5: {
-    enemyImg: 'lv5', enemyHp: 24, enemySpeed: 165, enemyDmg: 2, eliteRate: 0.32,
-    bossHp: 900, bossSpeed: 85, bossTime: 80, bossSkill: 'mixed',     bossSkillInterval: 8000,
+    enemyImg: 'lv5', enemyHp: 20, enemySpeed: 155, enemyDmg: 2, eliteRate: 0.25,
+    bossHp: 770, bossSpeed: 82, bossTime: 80, bossSkill: 'mixed',     bossSkillInterval: 9000,
     spawnCfg: [
-      { from: 0,  to: 25, interval: 1200, count: 2 },
-      { from: 25, to: 55, interval: 850,  count: 3 },
-      { from: 55, to: 80, interval: 600,  count: 4 },
+      { from: 0,  to: 25, interval: 1350, count: 2 },
+      { from: 25, to: 55, interval: 950,  count: 2 },
+      { from: 55, to: 80, interval: 700,  count: 3 },
     ],
   },
 };
@@ -667,7 +668,7 @@ function updateBoss(dt, now) {
           }
           triggerShake(14, 400);
           spawnParticles(sh.x, sh.y, 40, '#ffcc33');
-          playSfx('dead', 0.5);
+          playSfx('explode', 0.85);
           sh.fell = true;
           sh.fellAt = now;
         }
