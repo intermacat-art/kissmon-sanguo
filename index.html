@@ -1201,14 +1201,20 @@ function drawProjectile(p) {
 // ============================================================================
 // Pickups: xp, heart, canister
 // ============================================================================
+// 道具必須夾在玩家走得到的範圍內（敵人死在邊界外也不能留在邊界外吃不到）
+const PICKUP_PAD_X = 50;
+const PICKUP_PAD_Y_TOP = 70;
+const PICKUP_PAD_Y_BOT = 50;
+function pickupClampX(x) { return clamp(x, PICKUP_PAD_X, W - PICKUP_PAD_X); }
+function pickupClampY(y) { return clamp(y, PICKUP_PAD_Y_TOP, H - PICKUP_PAD_Y_BOT); }
 function dropXp(x, y, amount = 1) {
-  pickups.push({ type:'xp', x, y, amount, r:10,
+  pickups.push({ type:'xp', x: pickupClampX(x), y: pickupClampY(y), amount, r:10,
     vx:(Math.random()-0.5)*120, vy:(Math.random()-0.5)*120 });
 }
-function dropHeart(x, y)  { pickups.push({ type:'heart',  x, y, r:22, vx:0, vy:0 }); }
-function dropCan(x, y)    { pickups.push({ type:'can',    x, y, r:24, vx:0, vy:0 }); }
-function dropMagnet(x, y) { pickups.push({ type:'magnet', x, y, r:26, vx:0, vy:0 }); }
-function dropChest(x, y)  { pickups.push({ type:'chest',  x, y, r:32, vx:0, vy:0 }); }
+function dropHeart(x, y)  { pickups.push({ type:'heart',  x: pickupClampX(x), y: pickupClampY(y), r:22, vx:0, vy:0 }); }
+function dropCan(x, y)    { pickups.push({ type:'can',    x: pickupClampX(x), y: pickupClampY(y), r:24, vx:0, vy:0 }); }
+function dropMagnet(x, y) { pickups.push({ type:'magnet', x: pickupClampX(x), y: pickupClampY(y), r:26, vx:0, vy:0 }); }
+function dropChest(x, y)  { pickups.push({ type:'chest',  x: pickupClampX(x), y: pickupClampY(y), r:32, vx:0, vy:0 }); }
 
 function updatePickups(dt) {
   const MAGNET = 110;
@@ -1231,6 +1237,11 @@ function updatePickups(dt) {
     p.y += p.vy * dt/1000;
     p.vx *= (p.magnetized ? 0.98 : 0.92);
     p.vy *= (p.magnetized ? 0.98 : 0.92);
+    // 不允許道具漂出玩家走得到的範圍（magnet 吸到玩家時會飛越 clamp 不影響判定）
+    if (!p.magnetized) {
+      p.x = pickupClampX(p.x);
+      p.y = pickupClampY(p.y);
+    }
     const d = Math.hypot(p.x - player.x, p.y - player.y);
     if (d < player.r + p.r) { onPickup(p); p.picked = true; }
   }
