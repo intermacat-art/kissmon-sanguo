@@ -731,8 +731,8 @@ function updateBoss(dt, now) {
           boss.shadows.push({
             x: clamp(sx, 80, W - 80),
             y: clamp(sy, 80, H - 80),
-            r: 130,
-            fallAt: now + 2000 + i * 550,
+            r: 169,                              // 130 × 1.3
+            fallAt: now + 1500 + i * 550,         // 鎖定 1.5s
             fell: false,
           });
         }
@@ -891,7 +891,7 @@ function drawShadows() {
   const now = performance.now();
   for (const sh of boss.shadows) {
     const remain = sh.fallAt - now;
-    const total = 2000;
+    const total = 1500;    // 鎖定動畫總長（配合上方 fallAt = now + 1500）
     const t = Math.max(0, Math.min(1, 1 - remain / total));   // 0 → 1
     ctx.save();
     // 黑影主體
