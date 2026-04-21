@@ -69,6 +69,7 @@ const IMG_PATHS = {
   intro4:'a/intro/lv4.jpg',
   intro5:'a/intro/lv5.jpg',
   final2:'a/final2.jpg',
+  ult_title:'a/ult/title.png',
 };
 const SFX_PATHS = {
   cut:'a/se/cut.aac', miss:'a/se/miss.aac', heal:'a/se/heal.aac',
@@ -80,6 +81,7 @@ const SFX_PATHS = {
   girlhurt:'a/se/girlhurt.mp3',
   vtdown:'a/se/vtdown.mp3',
   explode:'a/se/explode.mp3',     // L1/L4 泰山壓頂黑影落地
+  drum:'a/se/drum.mp3',           // 奧義「一瞬V殺」字掉落
 };
 const BGM_SRC = 'a/bgm/bgm.mp3';
 const MENU_BGM_SRC = 'a/bgm/menu.mp3';
@@ -449,8 +451,8 @@ function updatePlayer(dt, now) {
 }
 
 function drawPlayer() {
-  // ult chain/finale 期間改由 drawUltEffect 畫玩家（瞬移位置 + 殘影）
-  if (state === 'ult' && (ultPhase === 'chain' || ultPhase === 'finale')) return;
+  // ult chain/title/finale 期間改由 drawUltEffect 畫玩家（瞬移位置 + 殘影）
+  if (state === 'ult' && (ultPhase === 'chain' || ultPhase === 'title' || ultPhase === 'finale')) return;
   const now = performance.now();
   const attacking = now < player.attackUntil;
   const moving = !!(keys.KeyW||keys.KeyA||keys.KeyS||keys.KeyD||keys.ArrowUp||keys.ArrowDown||keys.ArrowLeft||keys.ArrowRight);
@@ -1506,7 +1508,7 @@ const pigHudEl = () => document.getElementById('pig-hud');
 const BB_SIZE = 80, KID_SIZE = 80;
 
 function syncMinions(now) {
-  const ultChaining = (state === 'ult' && (ultPhase === 'chain' || ultPhase === 'finale'));
+  const ultChaining = (state === 'ult' && (ultPhase === 'chain' || ultPhase === 'title' || ultPhase === 'finale'));
   const onStage = !ultChaining && (state === 'play' || state === 'levelup' || state === 'ult' || state === 'dying');
 
   // BB (波貝貝) — 繞體盾（升級變大）
@@ -1760,23 +1762,33 @@ function chooseSkill(k) {
 }
 
 // ============================================================================
-// Ult — 新流程：intro (3.6s 眼神特寫) → chain (近→遠連鎖瞬斬) → finale (HITS 結算)
+// Ult「一瞬V殺」— intro (3.6s 台詞) → chain (近→遠連斬) → title (四字掉落) → finale (HITS)
 // ============================================================================
-let ultPhase = null;      // 'intro' | 'chain' | 'finale'
+let ultPhase = null;      // 'intro' | 'chain' | 'title' | 'finale'
 let ultPhaseStart = 0;
-let ultChain = [];        // [target ref] 貪心最近鄰排序後的目標序列
+let ultChain = [];
 let ultHitIdx = 0;
 let ultHitCount = 0;
-let ultTrail = [];        // [{x,y}] 玩家折線軌跡
-let ultPlayerX = 0;       // chain 期間玩家顯示位置
+let ultTrail = [];
+let ultPlayerX = 0;
 let ultPlayerY = 0;
-let ultHitMs = 60;        // 每下耗時（動態：敵人越多越短）
+let ultHitMs = 60;
 let ultBossDmgDealt = 0;
+let ultTotalDamage = 0;      // chain 累計傷害（最後結算用）
+let ultTitleDrumPlayed = [false, false, false, false];   // 4 字各自的鼓聲旗標
 const ULT_INTRO_MS = 3600;
-const ULT_CHAIN_BUDGET_MS = 2600;   // chain 總時間預算
+const ULT_CHAIN_BUDGET_MS = 2600;
 const ULT_CHAIN_HIT_MS_MIN = 30;
 const ULT_CHAIN_HIT_MS_MAX = 90;
-const ULT_FINALE_MS = 1400;
+const ULT_TITLE_DROP_INTERVAL = 100;    // 每個字間隔 100ms 掉下
+const ULT_TITLE_DROP_MS = 220;          // 單字掉落動畫長度
+const ULT_TITLE_HOLD_MS = 1000;         // 4 字到齊後停留
+const ULT_TITLE_TOTAL_MS = ULT_TITLE_DROP_INTERVAL * 4 + ULT_TITLE_DROP_MS + ULT_TITLE_HOLD_MS; // 2100
+const ULT_FINALE_MS = 1600;
+// 「一瞬V殺」4 字在原圖（1920×1080）的 x 切片
+const ULT_TITLE_SLICES = [[0, 500], [500, 1001], [1001, 1386], [1386, 1920]];
+const ULT_TITLE_SRC_Y = 280;    // crop top
+const ULT_TITLE_SRC_H = 480;    // crop height
 
 function tryUlt() {
   if (player.canisters <= 0) return;
@@ -1791,6 +1803,8 @@ function tryUlt() {
   ultHitCount = 0;
   ultTrail = [];
   ultBossDmgDealt = 0;
+  ultTotalDamage = 0;
+  ultTitleDrumPlayed = [false, false, false, false];
   ultPlayerX = player.x;
   ultPlayerY = player.y;
   document.getElementById('ult-img').style.display = 'block';
@@ -1834,8 +1848,8 @@ function updateUltPhase(pnow) {
       ultTrail = [{ x: player.x, y: player.y }];
       ultPlayerX = player.x; ultPlayerY = player.y;
       if (ultChain.length === 0) {
-        // 場上沒敵人 → 直接進 finale
-        ultPhase = 'finale';
+        // 場上沒敵人 → 跳過 chain 直接進 title 儀式
+        ultPhase = 'title';
       } else {
         ultPhase = 'chain';
       }
@@ -1849,7 +1863,21 @@ function updateUltPhase(pnow) {
       ultHitIdx++;
     }
     if (ultHitIdx >= ultChain.length && pe >= ultChain.length * ultHitMs + 180) {
-      // 最後一擊餘韻 180ms，轉 finale
+      // chain 完 → 進 title 字幕儀式（敵人仍保持倒下前的凍結）
+      ultPhase = 'title';
+      ultPhaseStart = pnow;
+    }
+  } else if (ultPhase === 'title') {
+    // 4 字逐個在各自時刻觸發 drum 音效
+    for (let i = 0; i < 4; i++) {
+      const dropAt = i * ULT_TITLE_DROP_INTERVAL;
+      if (!ultTitleDrumPlayed[i] && pe >= dropAt) {
+        playSfx('drum', 0.9);
+        triggerShake(6, 220);
+        ultTitleDrumPlayed[i] = true;
+      }
+    }
+    if (pe >= ULT_TITLE_TOTAL_MS) {
       ultPhase = 'finale';
       ultPhaseStart = pnow;
     }
@@ -1883,13 +1911,16 @@ function doUltHit(target, now) {
       boss.hp = Math.max(1, boss.hp - dmg);
       boss.hitFlash = 300;
       ultBossDmgDealt++;
+      ultTotalDamage += actual;
       spawnDamageLabel(boss.x, boss.y - 40, actual, '#ffd84d', true);
     } else {
+      ultTotalDamage += 1;
       spawnDamageLabel(boss.x, boss.y - 40, 1, '#ffffff', false);
     }
   } else {
     const dmg = Math.max(1, target.hp);
     target.hp = 0;
+    ultTotalDamage += dmg;
     spawnDamageLabel(target.x, target.y - 20, dmg, '#ff6060', true);
     // 手動收屍（跳過 onEnemyKill，避免 die SFX × N + 50 個寶箱/愛心掉落爆音）
     killCount++;
@@ -1905,17 +1936,17 @@ function doUltHit(target, now) {
 
 function drawUltEffect() {
   if (ultPhase === 'intro') return;  // intro 用 ult-img 蓋住
-  if (ultPhase !== 'chain' && ultPhase !== 'finale') return;
+  if (ultPhase !== 'chain' && ultPhase !== 'title' && ultPhase !== 'finale') return;
   const now = performance.now();
   const pe = now - ultPhaseStart;
 
-  // 時停灰底（覆蓋畫面）
+  // 時停灰底（所有非 intro 階段都有）
   ctx.save();
   ctx.fillStyle = 'rgba(15, 18, 32, 0.55)';
   ctx.fillRect(0, 0, W, H);
   ctx.restore();
 
-  // 紅色折線軌跡（外粗紅 + 內細白）
+  // 紅色折線軌跡（chain 一路到 finale 結束都顯示，留下殘念）
   if (ultTrail.length >= 2) {
     ctx.save();
     ctx.lineCap = 'round';
@@ -1935,7 +1966,7 @@ function drawUltEffect() {
     ctx.restore();
   }
 
-  // 玩家殘影（最近幾個軌跡點，淡入淡出）
+  // 玩家殘影（chain 結束後畫最後定格位置）
   const pimg = imgs.attack && imgs.attack.naturalWidth ? imgs.attack : imgs.walk1;
   if (pimg && pimg.naturalWidth) {
     const w = 130;
@@ -1949,7 +1980,6 @@ function drawUltEffect() {
       const p = ultTrail[i];
       ctx.drawImage(pimg, p.x - w/2, p.y - h/2 - 8, w, h);
     }
-    // 當前玩家位置（滿透明度）
     ctx.globalAlpha = 1;
     ctx.drawImage(pimg, ultPlayerX - w/2, ultPlayerY - h/2 - 8, w, h);
     ctx.restore();
@@ -1972,29 +2002,87 @@ function drawUltEffect() {
     ctx.textBaseline = 'alphabetic';
   }
 
-  // Finale 中央大字
+  // Title 階段：「一瞬V殺」4 字咚咚咚掉下
+  if (ultPhase === 'title' || ultPhase === 'finale') {
+    drawUltTitle(ultPhase === 'finale' ? ULT_TITLE_TOTAL_MS : pe, ultPhase === 'finale');
+  }
+
+  // Finale 大字 + 總傷害
   if (ultPhase === 'finale') {
     const t = pe / ULT_FINALE_MS;
     const ease = t < 0.35 ? (t / 0.35) : 1;
-    const fade = t < 0.7 ? 1 : Math.max(0, 1 - (t - 0.7) / 0.3);
-    const scale = 0.55 + ease * 0.7 + (1 - fade) * 0.3;
+    const fade = t < 0.75 ? 1 : Math.max(0, 1 - (t - 0.75) / 0.25);
+    const scale = 0.5 + ease * 0.7 + (1 - fade) * 0.25;
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.globalAlpha = fade;
-    ctx.translate(W/2, H/2);
+    // HITS 大字（下方）
+    ctx.save();
+    ctx.translate(W/2, H/2 + 90);
     ctx.scale(scale, scale);
     ctx.lineWidth = 14;
     ctx.strokeStyle = '#8b0000';
     ctx.fillStyle = '#ffe14a';
     ctx.shadowColor = '#ff5020';
     ctx.shadowBlur = 36;
-    ctx.font = 'bold 180px "Microsoft JhengHei"';
+    ctx.font = 'bold 150px "Microsoft JhengHei"';
     const text = `${ultHitCount} HITS`;
     ctx.strokeText(text, 0, 0);
     ctx.fillText(text, 0, 0);
     ctx.restore();
+    // 總傷害（HITS 下面小字）
+    ctx.save();
+    ctx.translate(W/2, H/2 + 200);
+    const s2 = Math.min(1, ease * 1.2);
+    ctx.scale(s2, s2);
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = '#000';
+    ctx.fillStyle = '#fff';
+    ctx.shadowColor = '#ff8040';
+    ctx.shadowBlur = 14;
+    ctx.font = 'bold 54px "Microsoft JhengHei"';
+    const dmgText = `總傷害 ${Math.round(ultTotalDamage)}`;
+    ctx.strokeText(dmgText, 0, 0);
+    ctx.fillText(dmgText, 0, 0);
+    ctx.restore();
+    ctx.restore();
     ctx.textBaseline = 'alphabetic';
+  }
+}
+
+// 「一瞬V殺」4 字逐個掉落
+function drawUltTitle(pe, isFinale) {
+  const img = imgs.ult_title;
+  if (!img || !img.naturalWidth) return;
+  const sc = 0.55;   // 原圖 1920×480 → 顯示 1056×264，置中
+  const tW = 1920 * sc;
+  const tH = ULT_TITLE_SRC_H * sc;
+  const startX = (W - tW) / 2;
+  const settleY = (H - tH) / 2 - 60;   // 稍微偏上（finale HITS 會在下方）
+  const dropFromOffset = 460;          // 從畫面上方 460px 掉落
+  for (let i = 0; i < 4; i++) {
+    const sliceStart = i * ULT_TITLE_DROP_INTERVAL;
+    if (pe < sliceStart) continue;
+    const dropT = Math.min(1, (pe - sliceStart) / ULT_TITLE_DROP_MS);
+    // ease-out-quint + 輕微彈跳
+    const e = 1 - Math.pow(1 - dropT, 4);
+    const bounce = dropT >= 1 ? 0 : 0;
+    const dstY = (settleY - dropFromOffset) + e * dropFromOffset + bounce;
+    const [sx0, sx1] = ULT_TITLE_SLICES[i];
+    const srcW = sx1 - sx0;
+    const dstW = srcW * sc;
+    const dstX = startX + sx0 * sc;
+    // finale 階段的字幕淡出一點（讓 HITS 出頭）
+    const alpha = isFinale ? 0.75 : 1;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = 'rgba(0,0,0,0.55)';
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 8;
+    ctx.drawImage(img, sx0, ULT_TITLE_SRC_Y, srcW, ULT_TITLE_SRC_H,
+                  dstX, dstY, dstW, tH);
+    ctx.restore();
   }
 }
 
@@ -2686,9 +2774,9 @@ function mainLoop(now) {
   last = now;
   const pnow = performance.now();
 
-  // Ult 超強保險：任何情境下，ultStartTime 超過 10 秒還沒 reset，強制清乾淨
-  // (intro 3.6 + chain ≤ 2.8 + finale 1.4 = 7.8s，留 2s buffer)
-  if (ultStartTime && pnow - ultStartTime > 10000) {
+  // Ult 超強保險：任何情境下，ultStartTime 超過 12 秒還沒 reset，強制清乾淨
+  // (intro 3.6 + chain ≤ 2.8 + title 2.1 + finale 1.6 = 10.1s，留 2s buffer)
+  if (ultStartTime && pnow - ultStartTime > 12000) {
     console.warn('[ULT] super-timeout, forcing recovery');
     ultStartTime = 0;
     ultPhase = null;
