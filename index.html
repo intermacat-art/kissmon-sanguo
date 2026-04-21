@@ -2152,6 +2152,20 @@ function mainLoop(now) {
   last = now;
   const pnow = performance.now();
 
+  // Ult 超強保險：任何情境下，ultStartTime 超過 8 秒還沒 reset，強制清乾淨並回 play
+  if (ultStartTime && pnow - ultStartTime > 8000) {
+    console.warn('[ULT] super-timeout, forcing recovery');
+    ultStartTime = 0;
+    ultPhase = null;
+    ultPhaseStart = 0;
+    ultExplosions = [];
+    document.getElementById('ult-img').style.display = 'none';
+    if (state === 'ult') {
+      state = 'play';
+      if (bgm) { try { bgm.volume = 0.3; } catch(e){} }
+    }
+  }
+
   if (state === 'play') {
     elapsed = (pnow - gameStartTime) / 1000;
     updatePlayer(dt, pnow);
