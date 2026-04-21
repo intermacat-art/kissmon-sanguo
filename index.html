@@ -178,6 +178,7 @@ let deathAnims = [];   // 敵人切半紙片動畫
 let hitFx = [];        // BOSS 命中玩家「快速斬」特效
 let slashHits = [];    // 玩家白弧斬擊命中敵人特效
 let critLabels = [];   // 暴擊時跳出的「暴擊!」金字
+let damageLabels = []; // 傷害浮字：[{x,y,text,color,start,isBig,vx}]
 let boss = null;
 let bossSpawned = false;
 let bossIntroStart = 0;
@@ -323,7 +324,7 @@ addEventListener('keydown', e => {
       ultStartTime = 0;
       ultPhase = null;
       ultPhaseStart = 0;
-      ultExplosions = [];
+      ultChain = []; ultTrail = []; ultHitCount = 0;
       document.getElementById('ult-img').style.display = 'none';
       state = 'play';
       last = performance.now();
@@ -448,6 +449,8 @@ function updatePlayer(dt, now) {
 }
 
 function drawPlayer() {
+  // ult chain/finale 期間改由 drawUltEffect 畫玩家（瞬移位置 + 殘影）
+  if (state === 'ult' && (ultPhase === 'chain' || ultPhase === 'finale')) return;
   const now = performance.now();
   const attacking = now < player.attackUntil;
   const moving = !!(keys.KeyW||keys.KeyA||keys.KeyS||keys.KeyD||keys.ArrowUp||keys.ArrowDown||keys.ArrowLeft||keys.ArrowRight);
@@ -907,6 +910,7 @@ function performSlash(now) {
       e.hp -= dmg;
       e.hitFlash = crit ? 220 : 160;
       spawnParticles(e.x, e.y, crit ? 10 : 6, crit ? '#ffd84d' : '#ffe8c8');
+      spawnDamageLabel(e.x + (Math.random()-0.5)*18, e.y - e.r - 6, dmg, crit ? '#ffd84d' : '#ffffff', crit);
       if (crit) critLabels.push({ x: e.x, y: e.y - 20, start: now });
       // 每個被打到的敵人身上各加一個白弧斬擊特效
       const aimAngle = Math.atan2(e.y - player.y, e.x - player.x);
@@ -921,6 +925,47 @@ function performSlash(now) {
     }
   }
   playSfx('cut', anyHit ? 0.8 : 0.35);
+}
+
+function spawnDamageLabel(x, y, amount, color, isBig) {
+  damageLabels.push({
+    x, y,
+    text: String(Math.round(amount)),
+    color: color || '#ffffff',
+    start: performance.now(),
+    isBig: !!isBig,
+    vx: (Math.random() - 0.5) * 50,
+  });
+}
+
+function drawDamageLabels() {
+  const now = performance.now();
+  const DUR = 650;
+  if (damageLabels.length === 0) return;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const d of damageLabels) {
+    const t = (now - d.start) / DUR;
+    if (t >= 1) continue;
+    const y = d.y - t * 48;
+    const x = d.x + d.vx * t;
+    const alpha = t < 0.65 ? 1 : Math.max(0, 1 - (t - 0.65) / 0.35);
+    const baseSize = d.isBig ? 36 : 24;
+    const scale = d.isBig ? (0.8 + t * 0.45) : (0.9 + t * 0.3);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(x, y);
+    ctx.scale(scale, scale);
+    ctx.lineWidth = d.isBig ? 5 : 4;
+    ctx.strokeStyle = '#000';
+    ctx.fillStyle = d.color;
+    ctx.font = `bold ${baseSize}px "Microsoft JhengHei"`;
+    ctx.strokeText(d.text, 0, 0);
+    ctx.fillText(d.text, 0, 0);
+    ctx.restore();
+  }
+  damageLabels = damageLabels.filter(d => (now - d.start) < DUR);
+  ctx.textBaseline = 'alphabetic';
 }
 
 function drawCritLabels() {
@@ -1011,6 +1056,7 @@ function updateProjectiles(dt) {
         e.hitFlash = 160;
         p.hitIds.add(e.id);
         spawnParticles(p.x, p.y, 4, '#fffacd');
+        spawnDamageLabel(e.x + (Math.random()-0.5)*16, e.y - e.r - 4, p.dmg, '#ffe8a0', false);
         if (p.pierce <= 0) { p.life = 0; break; }
         p.pierce--;
         if (e.hp <= 0 && e !== boss) onEnemyKill(e);
@@ -1398,6 +1444,7 @@ function updateMinions(dt, now) {
           e.hitFlash = 140;
           e.bbHitUntil = now + 350;
           spawnParticles(bx, by, 4, '#ffb0b0');
+          spawnDamageLabel(e.x + (Math.random()-0.5)*16, e.y - e.r - 4, bbDmg, '#ffc0c0', false);
           if (e.hp <= 0 && e !== boss) onEnemyKill(e);
         }
       }
@@ -1459,7 +1506,8 @@ const pigHudEl = () => document.getElementById('pig-hud');
 const BB_SIZE = 80, KID_SIZE = 80;
 
 function syncMinions(now) {
-  const onStage = (state === 'play' || state === 'levelup' || state === 'ult' || state === 'dying');
+  const ultChaining = (state === 'ult' && (ultPhase === 'chain' || ultPhase === 'finale'));
+  const onStage = !ultChaining && (state === 'play' || state === 'levelup' || state === 'ult' || state === 'dying');
 
   // BB (波貝貝) — 繞體盾（升級變大）
   const bb = bbEl();
@@ -1712,15 +1760,23 @@ function chooseSkill(k) {
 }
 
 // ============================================================================
-// Ult
+// Ult — 新流程：intro (3.6s 眼神特寫) → chain (近→遠連鎖瞬斬) → finale (HITS 結算)
 // ============================================================================
-let ultExplosions = [];   // [{x,y,isBoss}]
-let ultPhase = null;      // 'intro' | 'freeze' | 'boom'
+let ultPhase = null;      // 'intro' | 'chain' | 'finale'
 let ultPhaseStart = 0;
-let ultChainToken = 0;    // 每次 tryUlt +1，舊 chain 回呼用 token 比對失效
+let ultChain = [];        // [target ref] 貪心最近鄰排序後的目標序列
+let ultHitIdx = 0;
+let ultHitCount = 0;
+let ultTrail = [];        // [{x,y}] 玩家折線軌跡
+let ultPlayerX = 0;       // chain 期間玩家顯示位置
+let ultPlayerY = 0;
+let ultHitMs = 60;        // 每下耗時（動態：敵人越多越短）
+let ultBossDmgDealt = 0;
 const ULT_INTRO_MS = 3600;
-const ULT_FREEZE_MS = 1000;
-const ULT_BOOM_MS = 800;
+const ULT_CHAIN_BUDGET_MS = 2600;   // chain 總時間預算
+const ULT_CHAIN_HIT_MS_MIN = 30;
+const ULT_CHAIN_HIT_MS_MAX = 90;
+const ULT_FINALE_MS = 1400;
 
 function tryUlt() {
   if (player.canisters <= 0) return;
@@ -1730,82 +1786,232 @@ function tryUlt() {
   ultStartTime = performance.now();
   ultPhase = 'intro';
   ultPhaseStart = ultStartTime;
-  const myToken = ++ultChainToken;   // 舊 chain 的 callback 會因 token 不符而 no-op
-  ultExplosions = [];
-  for (const e of enemies) ultExplosions.push({ x: e.x, y: e.y });
-  if (boss && bossVulnerable()) ultExplosions.push({ x: boss.x, y: boss.y, isBoss: true });
+  ultChain = [];
+  ultHitIdx = 0;
+  ultHitCount = 0;
+  ultTrail = [];
+  ultBossDmgDealt = 0;
+  ultPlayerX = player.x;
+  ultPlayerY = player.y;
   document.getElementById('ult-img').style.display = 'block';
   playSfx('ult', 1.0);
   if (bgm) bgm.volume = 0.05;
-  console.log('[ULT] start', { level: currentLevel, token: myToken });
-  setTimeout(() => {
-    if (state !== 'ult' || myToken !== ultChainToken) return;
-    document.getElementById('ult-img').style.display = 'none';
-    ultPhase = 'freeze';
-    ultPhaseStart = performance.now();
-    setTimeout(() => {
-      if (state !== 'ult' || myToken !== ultChainToken) return;
-      ultPhase = 'boom';
-      ultPhaseStart = performance.now();
-      setTimeout(() => {
-        if (state !== 'ult' || myToken !== ultChainToken) return;
-        console.log('[ULT] finish via chain', { level: currentLevel, token: myToken });
-        finishUltScreen();
-      }, ULT_BOOM_MS);
-    }, ULT_FREEZE_MS);
-  }, ULT_INTRO_MS);
+  console.log('[ULT] start, level=', currentLevel);
+}
+
+// 貪心最近鄰排序：從玩家位置出發，每次跳到最近未訪問的目標
+function buildUltChain() {
+  const pool = enemies.slice();
+  if (boss && bossVulnerable()) pool.push(boss);
+  const chain = [];
+  let cx = player.x, cy = player.y;
+  while (pool.length) {
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < pool.length; i++) {
+      const d = Math.hypot(pool[i].x - cx, pool[i].y - cy);
+      if (d < bd) { bd = d; bi = i; }
+    }
+    const next = pool.splice(bi, 1)[0];
+    chain.push(next);
+    cx = next.x; cy = next.y;
+  }
+  return chain;
+}
+
+// 每幀更新 ult phase（取代舊的 setTimeout chain）
+function updateUltPhase(pnow) {
+  if (!ultPhase) return;
+  const pe = pnow - ultPhaseStart;
+  if (ultPhase === 'intro') {
+    if (pe >= ULT_INTRO_MS) {
+      document.getElementById('ult-img').style.display = 'none';
+      ultChain = buildUltChain();
+      const n = Math.max(1, ultChain.length);
+      ultHitMs = Math.max(ULT_CHAIN_HIT_MS_MIN,
+                          Math.min(ULT_CHAIN_HIT_MS_MAX, Math.floor(ULT_CHAIN_BUDGET_MS / n)));
+      ultHitIdx = 0;
+      ultHitCount = 0;
+      ultTrail = [{ x: player.x, y: player.y }];
+      ultPlayerX = player.x; ultPlayerY = player.y;
+      if (ultChain.length === 0) {
+        // 場上沒敵人 → 直接進 finale
+        ultPhase = 'finale';
+      } else {
+        ultPhase = 'chain';
+      }
+      ultPhaseStart = pnow;
+    }
+  } else if (ultPhase === 'chain') {
+    const shouldIdx = Math.min(ultChain.length, Math.floor(pe / ultHitMs));
+    while (ultHitIdx < shouldIdx) {
+      const target = ultChain[ultHitIdx];
+      if (target) doUltHit(target, pnow);
+      ultHitIdx++;
+    }
+    if (ultHitIdx >= ultChain.length && pe >= ultChain.length * ultHitMs + 180) {
+      // 最後一擊餘韻 180ms，轉 finale
+      ultPhase = 'finale';
+      ultPhaseStart = pnow;
+    }
+  } else if (ultPhase === 'finale') {
+    if (pe >= ULT_FINALE_MS) finishUltScreen();
+  }
+}
+
+function doUltHit(target, now) {
+  ultPlayerX = target.x;
+  ultPlayerY = target.y;
+  ultTrail.push({ x: target.x, y: target.y });
+  ultHitCount++;
+  // 斬擊方向：從上一個點指向當前目標
+  const prev = ultTrail[ultTrail.length - 2] || { x: target.x - 1, y: target.y };
+  const aimAngle = Math.atan2(target.y - prev.y, target.x - prev.x);
+  slashHits.push({
+    x: target.x, y: target.y,
+    angle: aimAngle + (Math.random() - 0.5) * 0.3,
+    start: now,
+    size: Math.max(70, Math.min(130, (target.r || 36) * 2.4)),
+  });
+  spawnParticles(target.x, target.y, 8, '#ffffff');
+  spawnParticles(target.x, target.y, 5, '#ff5030');
+  // 音效節流：每 3 下才播一次，避免爆音
+  if (ultHitCount % 3 === 1) playSfx('cut', 0.5);
+  if (target === boss) {
+    if (ultBossDmgDealt < 1) {
+      const dmg = Math.floor(boss.maxHp * 0.35);
+      const actual = Math.min(boss.hp - 1, dmg);
+      boss.hp = Math.max(1, boss.hp - dmg);
+      boss.hitFlash = 300;
+      ultBossDmgDealt++;
+      spawnDamageLabel(boss.x, boss.y - 40, actual, '#ffd84d', true);
+    } else {
+      spawnDamageLabel(boss.x, boss.y - 40, 1, '#ffffff', false);
+    }
+  } else {
+    const dmg = Math.max(1, target.hp);
+    target.hp = 0;
+    spawnDamageLabel(target.x, target.y - 20, dmg, '#ff6060', true);
+    // 手動收屍（跳過 onEnemyKill，避免 die SFX × N + 50 個寶箱/愛心掉落爆音）
+    killCount++;
+    dropXp(target.x, target.y, 2);
+    deathAnims.push({
+      x: target.x, y: target.y, w: target.w, h: target.h,
+      img: target.img, isElite: target.isElite, start: now,
+    });
+    const idx = enemies.indexOf(target);
+    if (idx >= 0) enemies.splice(idx, 1);
+  }
 }
 
 function drawUltEffect() {
-  if (ultPhase === 'intro') return;  // Phase1：ult-img 全螢幕蓋住
+  if (ultPhase === 'intro') return;  // intro 用 ult-img 蓋住
+  if (ultPhase !== 'chain' && ultPhase !== 'finale') return;
   const now = performance.now();
-  const t = now - ultPhaseStart;
-  if (ultPhase === 'freeze') {
-    // Phase2：畫面凍結，金色光暈脈動 1s
-    // clamp: t > ULT_FREEZE_MS 時 sin 會變負 → createRadialGradient r1<0 會拋 IndexSizeError
-    const k = Math.max(0, Math.sin((Math.min(t, ULT_FREEZE_MS) / ULT_FREEZE_MS) * Math.PI));
-    ctx.fillStyle = `rgba(255, 240, 140, ${k * 0.45})`;
-    ctx.fillRect(0, 0, W, H);
-    const r1 = Math.max(25, 600 * k);   // 至少 25 避免 r1<=0 crash
-    const g = ctx.createRadialGradient(player.x, player.y, 20, player.x, player.y, r1);
-    g.addColorStop(0, `rgba(255, 230, 100, ${0.7 * k})`);
-    g.addColorStop(1, 'rgba(255, 230, 100, 0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
-  } else if (ultPhase === 'boom') {
-    // Phase3：每個敵人位置爆炸圖 0.8s
-    const et = t / ULT_BOOM_MS;
-    const img = imgs.boom;
-    if (!img || !img.complete || !img.naturalWidth) return;
-    for (const ex of ultExplosions) {
-      const size = (ex.isBoss ? 380 : 220) * (0.5 + et * 0.85);
-      const alpha = et < 0.65 ? 1 : Math.max(0, 1 - (et - 0.65) / 0.35);
-      ctx.save();
+  const pe = now - ultPhaseStart;
+
+  // 時停灰底（覆蓋畫面）
+  ctx.save();
+  ctx.fillStyle = 'rgba(15, 18, 32, 0.55)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+
+  // 紅色折線軌跡（外粗紅 + 內細白）
+  if (ultTrail.length >= 2) {
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(255, 40, 60, 0.92)';
+    ctx.lineWidth = 10;
+    ctx.shadowColor = '#ff2030';
+    ctx.shadowBlur = 22;
+    ctx.beginPath();
+    ctx.moveTo(ultTrail[0].x, ultTrail[0].y);
+    for (let i = 1; i < ultTrail.length; i++) ctx.lineTo(ultTrail[i].x, ultTrail[i].y);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255, 230, 230, 0.98)';
+    ctx.lineWidth = 3;
+    ctx.shadowBlur = 6;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 玩家殘影（最近幾個軌跡點，淡入淡出）
+  const pimg = imgs.attack && imgs.attack.naturalWidth ? imgs.attack : imgs.walk1;
+  if (pimg && pimg.naturalWidth) {
+    const w = 130;
+    const h = w * pimg.naturalHeight / pimg.naturalWidth;
+    const n = ultTrail.length;
+    ctx.save();
+    for (let i = Math.max(0, n - 4); i < n - 1; i++) {
+      const alpha = ((i - (n - 4)) / 4) * 0.45;
+      if (alpha <= 0) continue;
       ctx.globalAlpha = alpha;
-      ctx.translate(ex.x, ex.y);
-      ctx.rotate(et * 0.8);
-      ctx.drawImage(img, -size/2, -size/2, size, size);
-      ctx.restore();
+      const p = ultTrail[i];
+      ctx.drawImage(pimg, p.x - w/2, p.y - h/2 - 8, w, h);
     }
+    // 當前玩家位置（滿透明度）
+    ctx.globalAlpha = 1;
+    ctx.drawImage(pimg, ultPlayerX - w/2, ultPlayerY - h/2 - 8, w, h);
+    ctx.restore();
+  }
+
+  // HITS 計數（chain 期間 HUD 右上）
+  if (ultPhase === 'chain' && ultHitCount > 0) {
+    ctx.save();
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = '#000';
+    ctx.fillStyle = '#ffd84d';
+    ctx.shadowColor = '#ff6020';
+    ctx.shadowBlur = 14;
+    ctx.font = 'bold 64px "Microsoft JhengHei"';
+    ctx.strokeText(`${ultHitCount} HITS`, W - 40, 140);
+    ctx.fillText(`${ultHitCount} HITS`, W - 40, 140);
+    ctx.restore();
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  // Finale 中央大字
+  if (ultPhase === 'finale') {
+    const t = pe / ULT_FINALE_MS;
+    const ease = t < 0.35 ? (t / 0.35) : 1;
+    const fade = t < 0.7 ? 1 : Math.max(0, 1 - (t - 0.7) / 0.3);
+    const scale = 0.55 + ease * 0.7 + (1 - fade) * 0.3;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.globalAlpha = fade;
+    ctx.translate(W/2, H/2);
+    ctx.scale(scale, scale);
+    ctx.lineWidth = 14;
+    ctx.strokeStyle = '#8b0000';
+    ctx.fillStyle = '#ffe14a';
+    ctx.shadowColor = '#ff5020';
+    ctx.shadowBlur = 36;
+    ctx.font = 'bold 180px "Microsoft JhengHei"';
+    const text = `${ultHitCount} HITS`;
+    ctx.strokeText(text, 0, 0);
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+    ctx.textBaseline = 'alphabetic';
   }
 }
 
 function finishUltScreen() {
-  for (const e of enemies) {
+  // chain 已經處理掉大部分敵人，這裡保險收割殘餘（極端情況）
+  for (const e of enemies.slice()) {
     dropXp(e.x, e.y, 2);
     killCount++;
   }
   enemies = [];
-  if (boss) {
-    const dmg = Math.floor(boss.maxHp * 0.3);
-    boss.hp = Math.max(1, boss.hp - dmg);
-    boss.hitFlash = 300;
-  }
-  ultExplosions = [];
   ultPhase = null;
-  ultStartTime = 0;   // 清 — 避免 L2+ 時殘留觸發超時守衛
+  ultStartTime = 0;
+  ultChain = [];
+  ultTrail = [];
+  ultHitCount = 0;
   document.getElementById('ult-img').style.display = 'none';
-  triggerShake(10, 300);
+  triggerShake(9, 320);
   last = performance.now();
   state = 'play';
   if (bgm) bgm.volume = 0.3;
@@ -1931,12 +2137,13 @@ function victory() {
 function startNextLevel() {
   currentLevel++;
   enemies = []; projectiles = []; pickups = []; particles = [];
-  deathAnims = []; hitFx = []; slashHits = []; ultExplosions = [];
+  deathAnims = []; hitFx = []; slashHits = []; critLabels = []; damageLabels = [];
   boss = null; bossSpawned = false;
   // 清 ult 殘留 — 避免前關奧義還沒結束就進關導致卡死
   ultPhase = null;
   ultStartTime = 0;
   ultPhaseStart = 0;
+  ultChain = []; ultTrail = []; ultHitCount = 0;
   document.getElementById('ult-img').style.display = 'none';
   // 角色回滿血 + 歸中 + 清 iframe，技能/等級/XP/罐頭保留
   player.hp = player.maxHp;
@@ -2348,6 +2555,7 @@ function drawGame() {
   drawPlayer();
   drawSlashHits();
   drawHitFx();
+  drawDamageLabels();
   drawCritLabels();
   if (state === 'ult') drawUltEffect();
   ctx.restore();
@@ -2437,9 +2645,10 @@ function resetGame() {
   player.critRate = 0;
   currentLevel = 1;
   enemies = []; projectiles = []; pickups = []; particles = [];
-  deathAnims = []; hitFx = []; slashHits = []; ultExplosions = [];
+  deathAnims = []; hitFx = []; slashHits = []; critLabels = []; damageLabels = [];
   boss = null; bossSpawned = false;
   ultPhase = null;
+  ultChain = []; ultTrail = []; ultHitCount = 0;
   gameStartTime = performance.now();
   elapsed = 0;
   lastSpawn = 0;
@@ -2477,13 +2686,15 @@ function mainLoop(now) {
   last = now;
   const pnow = performance.now();
 
-  // Ult 超強保險：任何情境下，ultStartTime 超過 8 秒還沒 reset，強制清乾淨並回 play
-  if (ultStartTime && pnow - ultStartTime > 8000) {
+  // Ult 超強保險：任何情境下，ultStartTime 超過 10 秒還沒 reset，強制清乾淨
+  // (intro 3.6 + chain ≤ 2.8 + finale 1.4 = 7.8s，留 2s buffer)
+  if (ultStartTime && pnow - ultStartTime > 10000) {
     console.warn('[ULT] super-timeout, forcing recovery');
     ultStartTime = 0;
     ultPhase = null;
     ultPhaseStart = 0;
-    ultExplosions = [];
+    ultChain = [];
+    ultTrail = [];
     document.getElementById('ult-img').style.display = 'none';
     if (state === 'ult') {
       state = 'play';
@@ -2504,12 +2715,8 @@ function mainLoop(now) {
     updateDying(dt, pnow);
     updateParticles(dt);
   } else if (state === 'ult') {
-    // 主要由 setTimeout 推進；這裡是保險：若 6.4s 正常長度都沒結束，強制 finish
-    const ULT_TOTAL = ULT_INTRO_MS + ULT_FREEZE_MS + ULT_BOOM_MS;
-    if (ultStartTime && pnow - ultStartTime > ULT_TOTAL + 2000) {
-      console.warn('Ult timeout fallback triggered');
-      finishUltScreen();
-    }
+    updateUltPhase(pnow);
+    updateParticles(dt);
   } else if (state === 'levelup' || state === 'passivePick' || state === 'levelIntro') {
     gameStartTime += dt;
     lastSpawn += dt;
