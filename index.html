@@ -148,7 +148,7 @@ const player = {
   moveSpeed: 220,
   attackInterval: 900, attackCooldown: 0,
   slashRange: 264,        // 近戰 AOE 半徑（1.2x 起始範圍）
-  slashDamage: 5,         // 近戰基礎傷害（較高）
+  slashDamage: 8.5,       // 近戰基礎傷害（5 * 1.7）
   canisters: 0, maxCanisters: 2,
   iframeUntil: 0,
   facing: 1,
@@ -2418,7 +2418,7 @@ function resetGame() {
   player.xp = 0; player.level = 1; player.xpNeeded = xpCurve(1);
   player.moveSpeed = 220;
   player.attackInterval = 900; player.attackCooldown = 0;
-  player.slashRange = 264; player.slashDamage = 5;
+  player.slashRange = 264; player.slashDamage = 8.5;
   player.canisters = 0; player.maxCanisters = 2;
   player.iframeUntil = 0;
   player.skills = {};
