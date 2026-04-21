@@ -228,35 +228,45 @@ const LV = {
     ],
   },
   3: {
-    enemyImg: 'lv3', enemyHp: 7,  enemySpeed: 145, enemyDmg: 1, eliteRate: 0.15,
-    bossHp: 260, bossSpeed: 80, bossTime: 70, bossSkill: 'summon',    bossSkillInterval: 14000,
+    enemyImg: 'lv3', enemyHp: 10, enemySpeed: 145, enemyDmg: 1, eliteRate: 0.18,
+    bossHp: 380, bossSpeed: 80, bossTime: 70, bossSkill: 'summon',    bossSkillInterval: 11000,
     spawnCfg: [
       { from: 0,  to: 20, interval: 1500, count: 1 },
-      { from: 20, to: 45, interval: 1000, count: 1 },
+      { from: 20, to: 45, interval: 1000, count: 2 },
       { from: 45, to: 70, interval: 750,  count: 2 },
     ],
   },
   4: {
-    enemyImg: 'lv4', enemyHp: 10, enemySpeed: 155, enemyDmg: 2, eliteRate: 0.18,
-    bossHp: 360, bossSpeed: 82, bossTime: 75, bossSkill: 'tripleJump',bossSkillInterval: 13000,
+    enemyImg: 'lv4', enemyHp: 16, enemySpeed: 155, enemyDmg: 2, eliteRate: 0.25,
+    bossHp: 560, bossSpeed: 82, bossTime: 75, bossSkill: 'tripleJump',bossSkillInterval: 11000,
     spawnCfg: [
       { from: 0,  to: 22, interval: 1400, count: 1 },
       { from: 22, to: 50, interval: 950,  count: 2 },
-      { from: 50, to: 75, interval: 700,  count: 2 },
+      { from: 50, to: 75, interval: 700,  count: 3 },
     ],
   },
   5: {
-    enemyImg: 'lv5', enemyHp: 14, enemySpeed: 165, enemyDmg: 2, eliteRate: 0.22,
-    bossHp: 500, bossSpeed: 85, bossTime: 80, bossSkill: 'mixed',     bossSkillInterval: 9500,
+    enemyImg: 'lv5', enemyHp: 24, enemySpeed: 165, enemyDmg: 2, eliteRate: 0.32,
+    bossHp: 900, bossSpeed: 85, bossTime: 80, bossSkill: 'mixed',     bossSkillInterval: 8000,
     spawnCfg: [
       { from: 0,  to: 25, interval: 1200, count: 2 },
-      { from: 25, to: 55, interval: 850,  count: 2 },
-      { from: 55, to: 80, interval: 600,  count: 3 },
+      { from: 25, to: 55, interval: 850,  count: 3 },
+      { from: 55, to: 80, interval: 600,  count: 4 },
     ],
   },
 };
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+// 三種精英小怪型態（金色衝撞、紫色遠程、藍綠坦克）
+const ELITE_TYPES = [
+  { name:'rush',   filter:'hue-rotate(35deg) saturate(2.1) brightness(1.15)',  shadow:'#ffd000',
+    hpMul:2.5, speedMul:1.15, dmgMul:1.5, sizeMul:1.2, xpDrop:3, ranged:false },
+  { name:'ranged', filter:'hue-rotate(255deg) saturate(2.0) brightness(1.10)', shadow:'#c060ff',
+    hpMul:1.8, speedMul:0.85, dmgMul:1.0, sizeMul:1.15, xpDrop:3, ranged:true, shootInterval:2400 },
+  { name:'tank',   filter:'hue-rotate(155deg) saturate(1.9) brightness(0.95)', shadow:'#40dddd',
+    hpMul:5.0, speedMul:0.70, dmgMul:1.8, sizeMul:1.35, xpDrop:5, ranged:false },
+];
 let currentLevel = 1;
 
 const minionState = {
@@ -458,31 +468,65 @@ function spawnEnemy(isBoss = false) {
     bossIntroStart = performance.now();
   } else {
     const isElite = Math.random() < (cfg.eliteRate || 0);
+    let eliteType = null;
+    if (isElite) {
+      eliteType = ELITE_TYPES[Math.floor(Math.random() * ELITE_TYPES.length)];
+    }
+    const baseR = 32, baseS = 70;
     enemies.push({
       id: ++entityId, x, y,
-      hp: isElite ? Math.ceil(cfg.enemyHp * 2.5) : cfg.enemyHp,
-      speed: isElite ? cfg.enemySpeed * 1.15 : cfg.enemySpeed,
-      r: isElite ? 38 : 32,
+      hp: isElite ? Math.ceil(cfg.enemyHp * eliteType.hpMul) : cfg.enemyHp,
+      speed: isElite ? cfg.enemySpeed * eliteType.speedMul : cfg.enemySpeed,
+      r: isElite ? Math.floor(baseR * eliteType.sizeMul) : baseR,
       img,
-      w: isElite ? 84 : 70,
-      h: isElite ? 84 : 70,
-      dmg: isElite ? Math.ceil(cfg.enemyDmg * 1.5) : cfg.enemyDmg,
+      w: isElite ? Math.floor(baseS * eliteType.sizeMul) : baseS,
+      h: isElite ? Math.floor(baseS * eliteType.sizeMul) : baseS,
+      dmg: isElite ? Math.ceil(cfg.enemyDmg * eliteType.dmgMul) : cfg.enemyDmg,
       hitFlash: 0,
       lastHitPlayer: 0,
       isElite,
-      xpDrop: isElite ? 3 : 1,
+      eliteType,
+      xpDrop: isElite ? eliteType.xpDrop : 1,
+      shootCooldown: 0,
     });
   }
 }
 
 function updateEnemies(dt, now) {
-  // 小怪一律追玩家
   for (const e of enemies) {
     const dx = player.x - e.x, dy = player.y - e.y;
     const d = Math.hypot(dx, dy) || 1;
-    if (d > 2) {
-      e.x += (dx/d) * e.speed * dt/1000;
-      e.y += (dy/d) * e.speed * dt/1000;
+    const isRanged = e.isElite && e.eliteType && e.eliteType.ranged;
+    if (isRanged) {
+      // 遠程精英：保持 340-420 距離（太近逃、太遠追）+ 定期射擊
+      const idealD = 380;
+      if (d > idealD + 40) {
+        e.x += (dx/d) * e.speed * dt/1000;
+        e.y += (dy/d) * e.speed * dt/1000;
+      } else if (d < idealD - 40) {
+        e.x -= (dx/d) * e.speed * dt/1000;
+        e.y -= (dy/d) * e.speed * dt/1000;
+      }
+      // 邊界夾制
+      e.x = clamp(e.x, 40, W - 40);
+      e.y = clamp(e.y, 40, H - 40);
+      e.shootCooldown = (e.shootCooldown || 0) - dt;
+      if (e.shootCooldown <= 0) {
+        const speed = 420;
+        projectiles.push({
+          x: e.x, y: e.y,
+          vx: (dx/d) * speed, vy: (dy/d) * speed,
+          life: 2400, dmg: e.dmg || 1, pierce: 0, r: 14,
+          source: 'enemy', hostile: true, hitIds: new Set(),
+          angle: Math.atan2(dy, dx), color: '#c060ff',
+        });
+        e.shootCooldown = e.eliteType.shootInterval || 2400;
+      }
+    } else {
+      if (d > 2) {
+        e.x += (dx/d) * e.speed * dt/1000;
+        e.y += (dy/d) * e.speed * dt/1000;
+      }
     }
     if (d < e.r + player.r && now > player.iframeUntil) {
       hurtPlayer(e.dmg || 1, now);
@@ -612,8 +656,9 @@ function updateBoss(dt, now) {
         boss.ai = 'chase';
         boss.lastSkillAt = now;
       } else {
-        boss.x = boss.dashFromX + (boss.dashEndX - boss.dashFromX) * t;
-        boss.y = boss.dashFromY + (boss.dashEndY - boss.dashFromY) * t;
+        // 衝刺位置 clamp 在畫面內（避免 boss 飛出螢幕消失）
+        boss.x = clamp(boss.dashFromX + (boss.dashEndX - boss.dashFromX) * t, 100, W - 100);
+        boss.y = clamp(boss.dashFromY + (boss.dashEndY - boss.dashFromY) * t, 100, H - 100);
         // 衝刺軌跡拖尾：每 55ms 在 boss 當前位置 spawn 一個 hit 特效（快速斬視覺）
         if (!boss.lastDashFxAt || now - boss.lastDashFxAt > 55) {
           spawnHitFx(boss.x + (Math.random()-0.5)*40, boss.y + (Math.random()-0.5)*40);
@@ -760,9 +805,9 @@ function drawEnemy(e) {
     ctx.shadowColor = '#ff4040';
     ctx.shadowBlur = 28;
   }
-  if (e.isElite) {
-    ctx.filter = 'hue-rotate(35deg) saturate(2.1) brightness(1.15)';
-    ctx.shadowColor = '#ffd000';
+  if (e.isElite && e.eliteType) {
+    ctx.filter = e.eliteType.filter;
+    ctx.shadowColor = e.eliteType.shadow;
     ctx.shadowBlur = 22;
   }
   ctx.drawImage(e.img, e.x - e.w/2, e.y - e.h/2, e.w, e.h);
@@ -844,11 +889,23 @@ function drawSlashHits() {
 }
 
 function updateProjectiles(dt) {
+  const now = performance.now();
   const all = allTargets();
   for (const p of projectiles) {
     p.x += p.vx * dt/1000;
     p.y += p.vy * dt/1000;
     p.life -= dt;
+    if (p.hostile) {
+      // 敵人發射、打玩家
+      const d = Math.hypot(player.x - p.x, player.y - p.y);
+      if (d < player.r + p.r && now > player.iframeUntil) {
+        hurtPlayer(p.dmg || 1, now);
+        spawnParticles(p.x, p.y, 8, p.color || '#c060ff');
+        p.life = 0;
+      }
+      continue;
+    }
+    // 玩家陣營：打敵人
     for (const e of all) {
       if (p.hitIds.has(e.id)) continue;
       const d = Math.hypot(e.x - p.x, e.y - p.y);
@@ -856,7 +913,7 @@ function updateProjectiles(dt) {
         e.hp -= p.dmg;
         e.hitFlash = 160;
         p.hitIds.add(e.id);
-        spawnParticles(p.x, p.y, 6, '#fffacd');
+        spawnParticles(p.x, p.y, 4, '#fffacd');
         if (p.pierce <= 0) { p.life = 0; break; }
         p.pierce--;
         if (e.hp <= 0 && e !== boss) onEnemyKill(e);
@@ -873,6 +930,24 @@ function updateProjectiles(dt) {
 const SCISSOR_TIP_OFFSET = 2.535;
 
 function drawProjectile(p) {
+  if (p.hostile) {
+    // 敵方紫色魔彈
+    const now = performance.now();
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.shadowColor = p.color || '#c060ff';
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = p.color || '#c060ff';
+    ctx.beginPath();
+    ctx.arc(0, 0, p.r || 14, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.beginPath();
+    ctx.arc(0, 0, (p.r || 14) * 0.5, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
   const isKid = p.source === 'kid';
   if (isKid) {
     ctx.save();
@@ -993,8 +1068,18 @@ function onPickup(p) {
 }
 
 function openChest() {
+  const picks = pickPassiveChoices(3);
+  if (picks.length === 0) {
+    // 被動全 max — 補血 + 送奧義罐代替
+    player.hp = Math.min(player.maxHp, player.hp + 2);
+    if (player.canisters < player.maxCanisters) player.canisters++;
+    spawnParticles(player.x, player.y, 24, '#ff6a7a');
+    spawnHeartGain();
+    playSfx('heal', 1.0);
+    return;
+  }
   state = 'passivePick';
-  passivePicks = pickPassiveChoices(3);
+  passivePicks = picks;
   if (bgm) bgm.volume = 0.1;
   playSfx('lvup', 0.85);
   spawnParticles(player.x, player.y, 30, '#ffd84d');
@@ -1453,8 +1538,18 @@ function xpCurve(lv) {
 }
 
 function triggerLevelUp() {
+  const choices = pickWeightedChoices(3);
+  if (choices.length === 0) {
+    // 全技能都 max 了 — 補血代替
+    const gain = 2;
+    player.hp = Math.min(player.maxHp, player.hp + gain);
+    spawnParticles(player.x, player.y, 20, '#ff6a7a');
+    spawnHeartGain();
+    playSfx('heal', 0.9);
+    return;
+  }
   state = 'levelup';
-  levelUpChoices = pickWeightedChoices(3);
+  levelUpChoices = choices;
   if (bgm) bgm.volume = 0.1;
   playSfx('lvup', 0.9);
 }
@@ -1507,36 +1602,39 @@ function chooseSkill(k) {
 let ultExplosions = [];   // [{x,y,isBoss}]
 let ultPhase = null;      // 'intro' | 'freeze' | 'boom'
 let ultPhaseStart = 0;
-const ULT_INTRO_MS = 3600;   // 對齊 ult.aac 時長
+let ultChainToken = 0;    // 每次 tryUlt +1，舊 chain 回呼用 token 比對失效
+const ULT_INTRO_MS = 3600;
 const ULT_FREEZE_MS = 1000;
 const ULT_BOOM_MS = 800;
 
 function tryUlt() {
   if (player.canisters <= 0) return;
-  if (state !== 'play') return;   // 防禦
+  if (state !== 'play') return;
   player.canisters--;
   state = 'ult';
   ultStartTime = performance.now();
   ultPhase = 'intro';
   ultPhaseStart = ultStartTime;
+  const myToken = ++ultChainToken;   // 舊 chain 的 callback 會因 token 不符而 no-op
   ultExplosions = [];
   for (const e of enemies) ultExplosions.push({ x: e.x, y: e.y });
   if (boss && bossVulnerable()) ultExplosions.push({ x: boss.x, y: boss.y, isBoss: true });
   document.getElementById('ult-img').style.display = 'block';
   playSfx('ult', 1.0);
   if (bgm) bgm.volume = 0.05;
-  // 用 setTimeout 保證時序一定推進（不依賴 mainLoop dt 邏輯）
+  console.log('[ULT] start', { level: currentLevel, token: myToken });
   setTimeout(() => {
-    if (state !== 'ult') return;
+    if (state !== 'ult' || myToken !== ultChainToken) return;
     document.getElementById('ult-img').style.display = 'none';
     ultPhase = 'freeze';
     ultPhaseStart = performance.now();
     setTimeout(() => {
-      if (state !== 'ult') return;
+      if (state !== 'ult' || myToken !== ultChainToken) return;
       ultPhase = 'boom';
       ultPhaseStart = performance.now();
       setTimeout(() => {
-        if (state !== 'ult') return;
+        if (state !== 'ult' || myToken !== ultChainToken) return;
+        console.log('[ULT] finish via chain', { level: currentLevel, token: myToken });
         finishUltScreen();
       }, ULT_BOOM_MS);
     }, ULT_FREEZE_MS);
@@ -1588,9 +1686,9 @@ function finishUltScreen() {
   }
   ultExplosions = [];
   ultPhase = null;
+  ultStartTime = 0;   // 清 — 避免 L2+ 時殘留觸發超時守衛
   document.getElementById('ult-img').style.display = 'none';
   triggerShake(10, 300);
-  // 防禦：強制重置 last，避免下一幀 dt 異常讓玩家攻擊卡住
   last = performance.now();
   state = 'play';
   if (bgm) bgm.volume = 0.3;
@@ -1680,6 +1778,10 @@ function startNextLevel() {
   player.x = W/2; player.y = H/2;
   player.iframeUntil = 0;
   player.slashVisualUntil = 0;
+  player.attackCooldown = 0;
+  player.attackUntil = 0;
+  player.animUntil = 0;
+  player.animType = null;
   gameStartTime = performance.now();
   elapsed = 0;
   lastSpawn = 0;
@@ -2020,8 +2122,12 @@ function drawBossIntro() {
 // Draw main
 // ============================================================================
 function drawGame() {
-  // 螢幕震動：translate canvas 後畫完再 restore
   const now = performance.now();
+  // 防禦：若 state 不是 ult 但 ult-img 仍顯示（可能殘留），強制隱藏
+  if (state !== 'ult') {
+    const ui = document.getElementById('ult-img');
+    if (ui && ui.style.display !== 'none') ui.style.display = 'none';
+  }
   const shaking = now < shakeUntil;
   ctx.save();
   if (shaking) {
