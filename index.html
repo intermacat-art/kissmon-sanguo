@@ -113,6 +113,24 @@ function playSfx(k, vol = 1) {
   try { const a = sfx[k].cloneNode(); a.volume = sfx[k].volume * vol; a.play(); } catch (e) {}
 }
 
+// 預渲染精英變色版本 — 避免每幀跑 ctx.filter (Chromium Windows 會 CPU fallback)
+function prerenderElites() {
+  for (const lvKey of ['lv1','lv2','lv3','lv4','lv5']) {
+    const src = imgs[lvKey];
+    if (!src || !src.naturalWidth) continue;
+    for (const type of ELITE_TYPES) {
+      const c = document.createElement('canvas');
+      c.width = src.naturalWidth;
+      c.height = src.naturalHeight;
+      const cx = c.getContext('2d');
+      cx.filter = type.filter;
+      cx.drawImage(src, 0, 0);
+      imgs[lvKey + '_' + type.name] = c;
+    }
+  }
+  console.log('[perf] elite variants prerendered');
+}
+
 // ============================================================================
 // State
 // ============================================================================
@@ -481,12 +499,14 @@ function spawnEnemy(isBoss = false) {
       eliteType = ELITE_TYPES[Math.floor(Math.random() * ELITE_TYPES.length)];
     }
     const baseR = 32, baseS = 70;
+    // 精英用預渲染的變色版本，每幀 drawImage 時不用 ctx.filter
+    const drawImg = isElite ? (imgs[cfg.enemyImg + '_' + eliteType.name] || img) : img;
     enemies.push({
       id: ++entityId, x, y,
       hp: isElite ? Math.ceil(cfg.enemyHp * eliteType.hpMul) : cfg.enemyHp,
       speed: isElite ? cfg.enemySpeed * eliteType.speedMul : cfg.enemySpeed,
       r: isElite ? Math.floor(baseR * eliteType.sizeMul) : baseR,
-      img,
+      img: drawImg,
       w: isElite ? Math.floor(baseS * eliteType.sizeMul) : baseS,
       h: isElite ? Math.floor(baseS * eliteType.sizeMul) : baseS,
       dmg: isElite ? Math.ceil(cfg.enemyDmg * eliteType.dmgMul) : cfg.enemyDmg,
@@ -553,6 +573,10 @@ function bossVulnerable() {
   return boss && (boss.ai === 'chase' || boss.ai === 'dashWarn' || boss.ai === 'dashing');
 }
 
+let _allTargetsCache = null;
+let _allTargetsCacheFrame = -1;
+let _frameId = 0;
+
 function drawDashWarning() {
   if (!boss || boss.ai !== 'dashWarn') return;
   const now = performance.now();
@@ -571,7 +595,11 @@ function drawDashWarning() {
   ctx.restore();
 }
 function allTargets() {
-  return bossVulnerable() ? enemies.concat(boss) : enemies;
+  // 每幀只 concat 一次，多次呼叫共用同一 array（省 GC）
+  if (_allTargetsCacheFrame === _frameId) return _allTargetsCache;
+  _allTargetsCache = bossVulnerable() ? enemies.concat(boss) : enemies;
+  _allTargetsCacheFrame = _frameId;
+  return _allTargetsCache;
 }
 
 function updateBoss(dt, now) {
@@ -816,18 +844,21 @@ function triggerShake(amt, dur) {
 }
 
 function drawEnemy(e) {
-  if (!e.img || !e.img.naturalWidth) return;
+  // e.img 對精英已是預渲染的變色 canvas，不用 ctx.filter（快 10x）
+  const img = e.img;
+  if (!img) return;
+  // Prerendered canvas 用 .width/.height，HTMLImageElement 用 .naturalWidth/.naturalHeight
+  const imgW = img.naturalWidth || img.width;
+  if (!imgW) return;
   ctx.save();
   if (e.hitFlash > 0) {
     ctx.shadowColor = '#ff4040';
-    ctx.shadowBlur = 28;
-  }
-  if (e.isElite && e.eliteType) {
-    ctx.filter = e.eliteType.filter;
+    ctx.shadowBlur = 18;   // 從 28 降
+  } else if (e.isElite && e.eliteType) {
     ctx.shadowColor = e.eliteType.shadow;
-    ctx.shadowBlur = 22;
+    ctx.shadowBlur = 12;   // 從 22 降
   }
-  ctx.drawImage(e.img, e.x - e.w/2, e.y - e.h/2, e.w, e.h);
+  ctx.drawImage(img, e.x - e.w/2, e.y - e.h/2, e.w, e.h);
   ctx.restore();
 }
 
@@ -888,7 +919,7 @@ function drawSlashHits() {
     const cx = -R, cy = 0;
     // 2 層繪製（外 glow + 內白）— 原本 3 層太吃效能
     ctx.shadowColor = '#ffffff';
-    ctx.shadowBlur = 22;
+    ctx.shadowBlur = 14;   // 從 22 降
     ctx.strokeStyle = 'rgba(255,255,255,0.75)';
     ctx.lineWidth = 16;
     ctx.beginPath();
@@ -969,31 +1000,23 @@ function drawProjectile(p) {
   if (isKid) {
     ctx.save();
     ctx.translate(p.x, p.y);
-    ctx.rotate(p.angle || 0);   // local +x = 飛行方向
-    // --- 白色靈氣拖尾（朝後拖） ---
+    ctx.rotate(p.angle || 0);
+    // 精簡為 1 層 shadow（原 4 層過度 overdraw）
     ctx.shadowColor = '#ffffff';
-    ctx.shadowBlur = 28;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
     ctx.beginPath();
-    ctx.ellipse(-18, 0, 60, 16, 0, 0, Math.PI*2);
+    ctx.ellipse(-10, 0, 52, 12, 0, 0, Math.PI*2);
     ctx.fill();
-    ctx.shadowBlur = 16;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-    ctx.beginPath();
-    ctx.ellipse(-10, 0, 46, 9, 0, 0, Math.PI*2);
-    ctx.fill();
-    ctx.shadowBlur = 5;
+    ctx.shadowBlur = 0;   // 剪刀不用 blur
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
-    ctx.ellipse(0, 0, 32, 4, 0, 0, Math.PI*2);
+    ctx.ellipse(0, 0, 30, 4, 0, 0, Math.PI*2);
     ctx.fill();
-    // --- 剪刀圖 (刀尖補償到飛行方向) ---
     const img = imgs.scissor;
     if (img && img.complete && img.naturalWidth) {
       const size = 72;
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = '#fff';
-      ctx.rotate(-SCISSOR_TIP_OFFSET);   // 原圖刀尖 145° → 轉到 local +x (0°)
+      ctx.rotate(-SCISSOR_TIP_OFFSET);
       ctx.drawImage(img, -size/2, -size/2, size, size);
     }
     ctx.restore();
@@ -1004,7 +1027,7 @@ function drawProjectile(p) {
     ctx.translate(p.x, p.y);
     ctx.rotate(performance.now() / 180 + (p.angle || 0));
     ctx.shadowColor = '#ffb04a';
-    ctx.shadowBlur = 18;
+    ctx.shadowBlur = 12;   // 從 18 降
     if (img && img.complete && img.naturalWidth) {
       ctx.drawImage(img, -size/2, -size/2, size, size);
     }
@@ -1220,8 +1243,12 @@ function drawPickup(p) {
 // ============================================================================
 // Particles
 // ============================================================================
+const MAX_PARTICLES = 150;
 function spawnParticles(x, y, n, color) {
-  for (let i = 0; i < n; i++) {
+  const room = MAX_PARTICLES - particles.length;
+  if (room <= 0) return;
+  const cap = Math.min(n, room);
+  for (let i = 0; i < cap; i++) {
     const a = Math.random() * Math.PI * 2;
     const v = 60 + Math.random() * 160;
     particles.push({
@@ -1235,7 +1262,9 @@ function spawnParticles(x, y, n, color) {
 }
 
 function spawnHeartGain() {
-  for (let i = 0; i < 12; i++) {
+  const room = MAX_PARTICLES - particles.length;
+  const n = Math.min(12, room);
+  for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2;
     particles.push({
       x: player.x + Math.cos(a)*16, y: player.y + Math.sin(a)*16,
@@ -1247,7 +1276,9 @@ function spawnHeartGain() {
 }
 
 function spawnHeartLose() {
-  for (let i = 0; i < 20; i++) {
+  const room = MAX_PARTICLES - particles.length;
+  const n = Math.min(20, room);
+  for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2;
     const v = 110 + Math.random() * 200;
     particles.push({
@@ -1477,12 +1508,14 @@ function drawDeathAnims() {
     if (t >= 1) continue;
     const alpha = 1 - t;
     const img = a.img;
-    if (!img || !img.naturalWidth) continue;
-    const nw = img.naturalWidth, nh = img.naturalHeight;
+    if (!img) continue;
+    const nw = img.naturalWidth || img.width;
+    const nh = img.naturalHeight || img.height;
+    if (!nw) continue;
     const halfH = Math.floor(nh / 2);
-    const eased = t * (2 - t);  // easeOut
+    const eased = t * (2 - t);
     ctx.save();
-    if (a.isElite) ctx.filter = 'hue-rotate(35deg) saturate(2.1) brightness(1.15)';
+    // 不用 ctx.filter — 精英的 img 已是預渲染變色版
     ctx.globalAlpha = alpha;
     // 上半：向左上滑 + 逆時針微旋
     ctx.save();
@@ -2343,6 +2376,7 @@ function goMenu() {
 // ============================================================================
 function mainLoop(now) {
   try {
+  _frameId++;   // 讓 allTargets cache 失效，每幀 recompute 一次
   const dt = Math.min(50, now - last);
   last = now;
   const pnow = performance.now();
@@ -2426,13 +2460,14 @@ function mainLoop(now) {
 // Init
 // ============================================================================
 loadAssets().then(() => {
+  prerenderElites();   // 先預渲染精英變色版本
   const lo = document.getElementById('loading');
   lo.classList.add('ready');
   lo.addEventListener('click', () => {
     lo.style.display = 'none';
     state = 'menu';
     last = performance.now();
-    if (menuBgm) menuBgm.play().catch(()=>{});   // 點擊已解鎖 audio，立即播
+    if (menuBgm) menuBgm.play().catch(()=>{});
     requestAnimationFrame(mainLoop);
   }, { once: true });
 });
