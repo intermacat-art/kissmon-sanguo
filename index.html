@@ -33,8 +33,9 @@ const ctx = CANVAS.getContext('2d');
 const IMG_PATHS = {
   menu1:'a/mon/menu1.png', menu2:'a/mon/menu2.png', menu3:'a/mon/menu3.png',
   walk1:'a/mon/walk1.png', walk2:'a/mon/walk2.png', attack:'a/mon/attack.png',
+  drink:'a/mon/drink.png', smoke:'a/mon/smoke.gif',
   heart:'a/item/heart.png', can:'a/item/can.png',
-  bb:'a/minion/bb.gif', kid:'a/minion/kid.gif',
+  bb:'a/minion/bb.gif', kid:'a/minion/kid.gif', pig:'a/minion/pig.gif',
   rrrr:'a/dead/rrrr.png',
   lv1:'a/enemy/lv1.png',
 };
@@ -94,6 +95,9 @@ const player = {
   facing: 1,
   walkPhase: 0,
   attackUntil: 0,
+  animUntil: 0,       // pickup/save animation override
+  animType: null,     // 'drink' | 'smoke'
+  pigCharges: 0,
   skills: {},
 };
 
@@ -126,6 +130,7 @@ const SKILLS = {
   ammo:   { name:'奧義罐包',    desc:'奧義罐上限 +1',     max:2, apply:()=>{ player.maxCanisters += 1; } },
   bb:     { name:'波貝貝 支援', desc:'召喚穿透彈隨從',    max:1, apply:()=>{ player.skills.bb = 1; } },
   kid:    { name:'親親子 支援', desc:'近戰旋轉隨從',      max:1, apply:()=>{ player.skills.kid = 1; } },
+  pig:    { name:'豬鼻醬 守護', desc:'致命攻擊時擋 1 次並回滿血', max:2, apply:()=>{ player.pigCharges++; } },
 };
 
 const LV = {
@@ -229,7 +234,10 @@ function drawPlayer() {
   const attacking = now < player.attackUntil;
   const moving = !!(keys.KeyW||keys.KeyA||keys.KeyS||keys.KeyD||keys.ArrowUp||keys.ArrowDown||keys.ArrowLeft||keys.ArrowRight);
   let img;
-  if (attacking) img = imgs.attack;
+  if (now < player.animUntil && player.animType && imgs[player.animType] && imgs[player.animType].naturalWidth) {
+    img = imgs[player.animType];
+  }
+  else if (attacking) img = imgs.attack;
   else if (moving) img = (Math.floor(player.walkPhase) % 2 === 0) ? imgs.walk1 : imgs.walk2;
   else img = imgs.walk1;
   if (!img || !img.naturalWidth) return;
@@ -424,12 +432,17 @@ function onPickup(p) {
       playSfx('heal');
       spawnHeartGain();
     }
+    // Always play the drink animation — even when maxed, the pickup is visible
+    player.animUntil = performance.now() + 650;
+    player.animType = 'drink';
   } else if (p.type === 'can') {
     if (player.canisters < player.maxCanisters) {
       player.canisters++;
       playSfx('heal', 0.6);
       spawnParticles(player.x, player.y, 14, '#0cf');
     }
+    player.animUntil = performance.now() + 650;
+    player.animType = 'smoke';
   }
 }
 
@@ -627,6 +640,18 @@ function onEnemyKill(e) {
 
 function hurtPlayer(dmg, now) {
   if (state !== 'play') return;
+  // 豬鼻醬 save: any hit that would kill
+  if (player.hp - dmg <= 0 && player.pigCharges > 0) {
+    player.pigCharges--;
+    player.hp = player.maxHp;
+    player.iframeUntil = now + 1600;
+    playSfx('heal');
+    spawnParticles(player.x, player.y, 50, '#ffc0cb');
+    spawnHeartGain();
+    player.animUntil = now + 1100;
+    player.animType = 'drink';
+    return;
+  }
   player.hp -= dmg;
   player.iframeUntil = now + 800;
   spawnHeartLose();
@@ -883,6 +908,12 @@ function drawHud() {
       ctx.restore();
     }
   }
+  // pig charges (豬鼻醬) below canisters
+  if (player.pigCharges > 0 && imgs.pig.complete) {
+    for (let i = 0; i < player.pigCharges; i++) {
+      ctx.drawImage(imgs.pig, 24 + i * 52, 140, 46, 46);
+    }
+  }
   // timer top-right
   ctx.textAlign = 'right';
   ctx.fillStyle = '#fff';
@@ -984,6 +1015,9 @@ function resetGame() {
   player.iframeUntil = 0;
   player.skills = {};
   player.facing = 1;
+  player.pigCharges = 0;
+  player.animUntil = 0;
+  player.animType = null;
   enemies = []; projectiles = []; pickups = []; particles = [];
   boss = null; bossSpawned = false;
   gameStartTime = performance.now();
