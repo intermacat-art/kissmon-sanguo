@@ -33,7 +33,7 @@
   <img id="mn-bb" class="minion" src="a/minion/bb.gif">
   <img id="mn-kid" class="minion" src="a/minion/kid.gif">
   <div id="pig-hud"></div>
-  <img id="ult-img" src="a/ult/final.jpg">
+  <img id="ult-img" style="display:none;">
   <video id="outro" src="a/outro.mp4" preload="auto"
          style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;display:none;z-index:22;"
          playsinline></video>
@@ -576,7 +576,63 @@ function updateEnemies(dt, now) {
   }
   enemies = enemies.filter(e => e.hp > 0);
   if (boss) updateBoss(dt, now);
-  if (boss && boss.hp <= 0 && state === 'play') victory();
+  if (boss && boss.hp <= 0 && state === 'play') killBoss(now);
+}
+
+// BOSS 死亡慢動作：旋轉飛出螢幕，然後才進 transition / final_victory
+let bossDyingStart = 0;
+const BOSS_DYING_MAX_MS = 2500;
+function killBoss(now) {
+  state = 'bossDying';
+  bossDyingStart = now;
+  // 飛行方向：遠離玩家（帶點向上偏移）
+  const dx = boss.x - player.x;
+  const dy = boss.y - player.y;
+  const d = Math.hypot(dx, dy) || 1;
+  const baseSpeed = 520;
+  boss.deathVx = (dx/d) * baseSpeed;
+  boss.deathVy = (dy/d) * baseSpeed - 260;   // 先往上飛
+  boss.deathAngle = 0;
+  boss.deathAngularVel = (Math.random() < 0.5 ? -1 : 1) * Math.PI * 3.5;   // 約 1.75 轉/秒
+  boss.ai = 'dying';
+  // 死亡音效 + 慢動作震屏
+  if (currentLevel >= 2) playSfx('vtdown', 1.0);
+  triggerShake(22, 700);
+  spawnParticles(boss.x, boss.y, 40, '#ffcc33');
+  spawnParticles(boss.x, boss.y, 20, '#ff4040');
+}
+
+function updateBossDying(dt, now) {
+  if (!boss) { victory(); return; }
+  const elapsed = now - bossDyingStart;
+  // 慢動作：前 700ms 大幅放慢（0.3x），之後漸回正常
+  const slowFactor = elapsed < 700 ? 0.3 : Math.min(1, 0.3 + (elapsed - 700) / 700 * 0.7);
+  const bdt = dt * slowFactor;
+  boss.x += boss.deathVx * bdt / 1000;
+  boss.y += boss.deathVy * bdt / 1000;
+  boss.deathAngle += boss.deathAngularVel * bdt / 1000;
+  boss.deathVy += 420 * bdt / 1000;   // 重力往下拉，軌跡成弧
+  // 每隔一段噴煙粒子（殘念）
+  if (Math.random() < 0.35) spawnParticles(boss.x, boss.y, 2, '#ff8844');
+  // 結算：飛出邊界或超時
+  const off = boss.x < -180 || boss.x > W + 180 || boss.y > H + 240 || boss.y < -260;
+  if (elapsed > BOSS_DYING_MAX_MS || off) {
+    victory();
+  }
+}
+
+function drawBossDying() {
+  if (!boss || !boss.img) return;
+  const img = boss.img;
+  const w = boss.w, h = boss.h;
+  ctx.save();
+  ctx.translate(boss.x, boss.y);
+  ctx.rotate(boss.deathAngle);
+  // 紅色發光（受擊色）
+  ctx.shadowColor = '#ff3030';
+  ctx.shadowBlur = 28;
+  ctx.drawImage(img, -w/2, -h/2, w, h);
+  ctx.restore();
 }
 
 // ============================================================================
@@ -1776,7 +1832,7 @@ let ultHitMs = 60;
 let ultBossDmgDealt = 0;
 let ultTotalDamage = 0;      // chain 累計傷害（最後結算用）
 let ultTitleDrumPlayed = [false, false, false, false];   // 4 字各自的鼓聲旗標
-const ULT_INTRO_MS = 3600;
+const ULT_INTRO_MS = 2600;              // 連斬提前 1s 觸發（蓋過語音末段）
 const ULT_CHAIN_BUDGET_MS = 2600;
 const ULT_CHAIN_HIT_MS_MIN = 30;
 const ULT_CHAIN_HIT_MS_MAX = 90;
@@ -1807,7 +1863,6 @@ function tryUlt() {
   ultTitleDrumPlayed = [false, false, false, false];
   ultPlayerX = player.x;
   ultPlayerY = player.y;
-  document.getElementById('ult-img').style.display = 'block';
   playSfx('ult', 1.0);
   if (bgm) bgm.volume = 0.05;
   console.log('[ULT] start, level=', currentLevel);
@@ -2017,34 +2072,19 @@ function drawUltEffect() {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.globalAlpha = fade;
-    // HITS 大字（下方）
+    // HITS 大字（下方，無總傷害）
     ctx.save();
-    ctx.translate(W/2, H/2 + 90);
+    ctx.translate(W/2, H/2 + 120);
     ctx.scale(scale, scale);
     ctx.lineWidth = 14;
     ctx.strokeStyle = '#8b0000';
     ctx.fillStyle = '#ffe14a';
     ctx.shadowColor = '#ff5020';
     ctx.shadowBlur = 36;
-    ctx.font = 'bold 150px "Microsoft JhengHei"';
+    ctx.font = 'bold 170px "Microsoft JhengHei"';
     const text = `${ultHitCount} HITS`;
     ctx.strokeText(text, 0, 0);
     ctx.fillText(text, 0, 0);
-    ctx.restore();
-    // 總傷害（HITS 下面小字）
-    ctx.save();
-    ctx.translate(W/2, H/2 + 200);
-    const s2 = Math.min(1, ease * 1.2);
-    ctx.scale(s2, s2);
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = '#000';
-    ctx.fillStyle = '#fff';
-    ctx.shadowColor = '#ff8040';
-    ctx.shadowBlur = 14;
-    ctx.font = 'bold 54px "Microsoft JhengHei"';
-    const dmgText = `總傷害 ${Math.round(ultTotalDamage)}`;
-    ctx.strokeText(dmgText, 0, 0);
-    ctx.fillText(dmgText, 0, 0);
     ctx.restore();
     ctx.restore();
     ctx.textBaseline = 'alphabetic';
@@ -2093,12 +2133,17 @@ function finishUltScreen() {
     killCount++;
   }
   enemies = [];
+  // 玩家位置：移到最後斬擊位置（慢慢收勢的感覺）
+  if (ultTrail.length > 0) {
+    const endP = ultTrail[ultTrail.length - 1];
+    player.x = clamp(endP.x, 60, W - 60);
+    player.y = clamp(endP.y, 80, H - 80);
+  }
   ultPhase = null;
   ultStartTime = 0;
   ultChain = [];
   ultTrail = [];
   ultHitCount = 0;
-  document.getElementById('ult-img').style.display = 'none';
   triggerShake(9, 320);
   last = performance.now();
   state = 'play';
@@ -2204,8 +2249,7 @@ function enterLevelIntro() {
 }
 
 function victory() {
-  // L2+ 倒地音效
-  if (currentLevel >= 2) playSfx('vtdown', 0.9);
+  // vtdown 音效已在 killBoss 播過，這裡不再重覆
   if (currentLevel >= 5) {
     state = 'final_victory';
     finalVictoryPhase = 'wait';       // wait 1s → congrats 3s → outro video
@@ -2637,6 +2681,10 @@ function drawGame() {
   if (boss && (boss.ai === 'chase' || boss.ai === 'dashWarn' || boss.ai === 'dashing' || boss.ai === 'jumping')) {
     drawEnemy(boss);
   }
+  // BOSS 死亡慢動作：旋轉飛出
+  if (state === 'bossDying' && boss && boss.ai === 'dying') {
+    drawBossDying();
+  }
   drawShadows();
   drawDashWarning();
   for (const p of projectiles) drawProjectile(p);
@@ -2805,6 +2853,9 @@ function mainLoop(now) {
   } else if (state === 'ult') {
     updateUltPhase(pnow);
     updateParticles(dt);
+  } else if (state === 'bossDying') {
+    updateBossDying(dt, pnow);
+    updateParticles(dt);
   } else if (state === 'levelup' || state === 'passivePick' || state === 'levelIntro') {
     gameStartTime += dt;
     lastSpawn += dt;
@@ -2838,7 +2889,7 @@ function mainLoop(now) {
     drawMenu();
   } else if (state === 'levelIntro') {
     drawLevelIntro();
-  } else if (state === 'play' || state === 'levelup' || state === 'ult' || state === 'dying' || state === 'paused' || state === 'passivePick' || state === 'transition') {
+  } else if (state === 'play' || state === 'levelup' || state === 'ult' || state === 'dying' || state === 'paused' || state === 'passivePick' || state === 'transition' || state === 'bossDying') {
     drawGame();
     if (state === 'levelup') drawLevelUp();
     if (state === 'passivePick') drawPassivePick();
