@@ -140,6 +140,7 @@ const player = {
   passives: {},
   armor: 0,
   projSpeedMul: 1,
+  critRate: 0,
 };
 
 let enemies = [];
@@ -201,58 +202,56 @@ const PASSIVES = {
            apply: () => { player.projSpeedMul = (player.projSpeedMul || 1) * 1.20; } },
   armor: { name:'紙鎧護身', desc:'受到傷害 -1（底線 1）',    max:3,
            apply: () => { player.armor = (player.armor || 0) + 1; } },
+  crit:  { name:'銳利刀鋒', desc:'暴擊率 +10%（雙倍傷害）',  max:5,
+           apply: () => { player.critRate = (player.critRate || 0) + 0.10; } },
 };
 let passivePicks = [];
 
+// PROTOTYPE 平衡：每關軟性提升，玩家技能跨關保留會越來越強，敵人只要稍微提升讓新關有感即可
 const LV = {
   1: {
-    enemyImg: 'lv1', enemyHp: 4,  enemySpeed: 130, enemyDmg: 1, eliteRate: 0.12,
-    bossHp: 150, bossSpeed: 75, bossTime: 80, bossSkill: 'jump',       bossSkillInterval: 12000,
+    enemyImg: 'lv1', enemyHp: 4,  enemySpeed: 125, enemyDmg: 1, eliteRate: 0.10,
+    bossHp: 120, bossSpeed: 75, bossTime: 60, bossSkill: 'jump',       bossSkillInterval: 12000,
     spawnCfg: [
-      { from: 0,  to: 20, interval: 1800, count: 1 },
-      { from: 20, to: 45, interval: 1250, count: 1 },
-      { from: 45, to: 70, interval: 900,  count: 1 },
-      { from: 70, to: 80, interval: 650,  count: 2 },
+      { from: 0,  to: 15, interval: 1800, count: 1 },
+      { from: 15, to: 35, interval: 1200, count: 1 },
+      { from: 35, to: 60, interval: 850,  count: 1 },
     ],
   },
   2: {
-    enemyImg: 'lv2', enemyHp: 6,  enemySpeed: 145, enemyDmg: 1, eliteRate: 0.15,
-    bossHp: 240, bossSpeed: 80, bossTime: 90, bossSkill: 'dash',       bossSkillInterval: 10000,
+    enemyImg: 'lv2', enemyHp: 5,  enemySpeed: 135, enemyDmg: 1, eliteRate: 0.12,
+    bossHp: 180, bossSpeed: 78, bossTime: 65, bossSkill: 'dash',       bossSkillInterval: 10000,
     spawnCfg: [
-      { from: 0,  to: 22, interval: 1600, count: 1 },
-      { from: 22, to: 50, interval: 1100, count: 1 },
-      { from: 50, to: 75, interval: 800,  count: 2 },
-      { from: 75, to: 90, interval: 550,  count: 2 },
+      { from: 0,  to: 18, interval: 1600, count: 1 },
+      { from: 18, to: 42, interval: 1100, count: 1 },
+      { from: 42, to: 65, interval: 800,  count: 1 },
     ],
   },
   3: {
-    enemyImg: 'lv3', enemyHp: 9,  enemySpeed: 155, enemyDmg: 1, eliteRate: 0.20,
-    bossHp: 380, bossSpeed: 80, bossTime: 100, bossSkill: 'summon',    bossSkillInterval: 15000,
+    enemyImg: 'lv3', enemyHp: 7,  enemySpeed: 145, enemyDmg: 1, eliteRate: 0.15,
+    bossHp: 260, bossSpeed: 80, bossTime: 70, bossSkill: 'summon',    bossSkillInterval: 14000,
     spawnCfg: [
-      { from: 0,  to: 25, interval: 1500, count: 1 },
-      { from: 25, to: 55, interval: 1050, count: 1 },
-      { from: 55, to: 85, interval: 750,  count: 2 },
-      { from: 85, to: 100, interval: 500, count: 2 },
+      { from: 0,  to: 20, interval: 1500, count: 1 },
+      { from: 20, to: 45, interval: 1000, count: 1 },
+      { from: 45, to: 70, interval: 750,  count: 2 },
     ],
   },
   4: {
-    enemyImg: 'lv4', enemyHp: 13, enemySpeed: 165, enemyDmg: 2, eliteRate: 0.22,
-    bossHp: 560, bossSpeed: 85, bossTime: 110, bossSkill: 'tripleJump',bossSkillInterval: 14000,
+    enemyImg: 'lv4', enemyHp: 10, enemySpeed: 155, enemyDmg: 2, eliteRate: 0.18,
+    bossHp: 360, bossSpeed: 82, bossTime: 75, bossSkill: 'tripleJump',bossSkillInterval: 13000,
     spawnCfg: [
-      { from: 0,  to: 28, interval: 1400, count: 1 },
-      { from: 28, to: 60, interval: 950,  count: 2 },
-      { from: 60, to: 95, interval: 700,  count: 2 },
-      { from: 95, to: 110, interval: 450, count: 3 },
+      { from: 0,  to: 22, interval: 1400, count: 1 },
+      { from: 22, to: 50, interval: 950,  count: 2 },
+      { from: 50, to: 75, interval: 700,  count: 2 },
     ],
   },
   5: {
-    enemyImg: 'lv5', enemyHp: 18, enemySpeed: 180, enemyDmg: 2, eliteRate: 0.28,
-    bossHp: 820, bossSpeed: 90, bossTime: 120, bossSkill: 'mixed',     bossSkillInterval: 9000,
+    enemyImg: 'lv5', enemyHp: 14, enemySpeed: 165, enemyDmg: 2, eliteRate: 0.22,
+    bossHp: 500, bossSpeed: 85, bossTime: 80, bossSkill: 'mixed',     bossSkillInterval: 9500,
     spawnCfg: [
-      { from: 0,   to: 30,  interval: 1200, count: 2 },
-      { from: 30,  to: 70,  interval: 850,  count: 2 },
-      { from: 70,  to: 100, interval: 600,  count: 3 },
-      { from: 100, to: 120, interval: 400,  count: 3 },
+      { from: 0,  to: 25, interval: 1200, count: 2 },
+      { from: 25, to: 55, interval: 850,  count: 2 },
+      { from: 55, to: 80, interval: 600,  count: 3 },
     ],
   },
 };
@@ -774,12 +773,15 @@ function performSlash(now) {
   const R = player.slashRange;
   const all = allTargets();
   let anyHit = false;
+  const critRate = player.critRate || 0;
   for (const e of all) {
     const d = Math.hypot(e.x - player.x, e.y - player.y);
     if (d < R + e.r) {
-      e.hp -= player.slashDamage;
-      e.hitFlash = 160;
-      spawnParticles(e.x, e.y, 6, '#ffe8c8');
+      const crit = Math.random() < critRate;
+      const dmg = crit ? player.slashDamage * 2 : player.slashDamage;
+      e.hp -= dmg;
+      e.hitFlash = crit ? 220 : 160;
+      spawnParticles(e.x, e.y, crit ? 10 : 6, crit ? '#ffd84d' : '#ffe8c8');
       // 每個被打到的敵人身上各加一個白弧斬擊特效
       const aimAngle = Math.atan2(e.y - player.y, e.x - player.x);
       slashHits.push({
@@ -808,24 +810,18 @@ function drawSlashHits() {
     ctx.translate(h.x, h.y);
     ctx.rotate(h.angle);
     ctx.lineCap = 'round';
-    // 圓心後移 R → 弧的 U 底（紅點）落在敵人位置 (0,0)
     const cx = -R, cy = 0;
+    // 2 層繪製（外 glow + 內白）— 原本 3 層太吃效能
     ctx.shadowColor = '#ffffff';
-    ctx.shadowBlur = 28;
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-    ctx.lineWidth = 18;
+    ctx.shadowBlur = 22;
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    ctx.lineWidth = 16;
     ctx.beginPath();
     ctx.arc(cx, cy, R, -Math.PI*0.7, Math.PI*0.7);
     ctx.stroke();
-    ctx.shadowBlur = 14;
-    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-    ctx.lineWidth = 8;
-    ctx.beginPath();
-    ctx.arc(cx, cy, R, -Math.PI*0.7, Math.PI*0.7);
-    ctx.stroke();
-    ctx.shadowBlur = 4;
+    ctx.shadowBlur = 0;
     ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 4;
     ctx.beginPath();
     ctx.arc(cx, cy, R, -Math.PI*0.7, Math.PI*0.7);
     ctx.stroke();
@@ -1194,11 +1190,8 @@ function updateMinions(dt, now) {
       if (d < touch) {
         const nx = dx / d, ny = dy / d;
         const push = (touch - d) + 20;
-        // 彈開：小怪全推、BOSS 只推一點點（避免 BOSS 飛太遠）
-        if (e === boss) {
-          e.x += nx * push * 0.35;
-          e.y += ny * push * 0.35;
-        } else {
+        // BOSS 不被彈開；小怪 / 精英全推
+        if (e !== boss) {
           e.x += nx * push;
           e.y += ny * push;
         }
@@ -1660,7 +1653,11 @@ function startNextLevel() {
   enemies = []; projectiles = []; pickups = []; particles = [];
   deathAnims = []; hitFx = []; slashHits = []; ultExplosions = [];
   boss = null; bossSpawned = false;
+  // 清 ult 殘留 — 避免前關奧義還沒結束就進關導致卡死
   ultPhase = null;
+  ultStartTime = 0;
+  ultPhaseStart = 0;
+  document.getElementById('ult-img').style.display = 'none';
   // 角色回滿血 + 歸中 + 清 iframe，技能/等級/XP/罐頭保留
   player.hp = player.maxHp;
   player.x = W/2; player.y = H/2;
@@ -2116,6 +2113,7 @@ function resetGame() {
   player.passives = {};
   player.armor = 0;
   player.projSpeedMul = 1;
+  player.critRate = 0;
   currentLevel = 1;
   enemies = []; projectiles = []; pickups = []; particles = [];
   deathAnims = []; hitFx = []; slashHits = []; ultExplosions = [];
@@ -2167,7 +2165,12 @@ function mainLoop(now) {
     updateDying(dt, pnow);
     updateParticles(dt);
   } else if (state === 'ult') {
-    // phase 推進由 setTimeout 在 tryUlt 處理，此處只繪製
+    // 主要由 setTimeout 推進；這裡是保險：若 6.4s 正常長度都沒結束，強制 finish
+    const ULT_TOTAL = ULT_INTRO_MS + ULT_FREEZE_MS + ULT_BOOM_MS;
+    if (ultStartTime && pnow - ultStartTime > ULT_TOTAL + 2000) {
+      console.warn('Ult timeout fallback triggered');
+      finishUltScreen();
+    }
   } else if (state === 'levelup' || state === 'passivePick') {
     gameStartTime += dt;
     lastSpawn += dt;
