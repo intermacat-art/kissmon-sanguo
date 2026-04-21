@@ -34,6 +34,9 @@
   <img id="mn-kid" class="minion" src="a/minion/kid.gif">
   <div id="pig-hud"></div>
   <img id="ult-img" src="a/ult/final.jpg">
+  <video id="outro" src="a/outro.mp4" preload="auto"
+         style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;display:none;z-index:22;"
+         playsinline></video>
   <div id="loading">
     <div class="loading-text">Loading...</div>
     <div class="start-btn">▶  點擊開始</div>
@@ -280,7 +283,8 @@ addEventListener('keydown', e => {
     } else if (state === 'paused') {
       const pauseDur = performance.now() - pauseStart;
       gameStartTime += pauseDur;
-      last += pauseDur;
+      // 注意：不要動 last，main loop 每幀都會更新 last，暫停期間 last 已是最新
+      // （之前誤加 last += pauseDur 會讓下一幀 dt < 0 → attackCooldown 累加 → 卡住攻擊）
       state = 'play';
       if (bgm) bgm.play().catch(()=>{});
     }
@@ -788,24 +792,26 @@ function drawSlashHits() {
     ctx.translate(h.x, h.y);
     ctx.rotate(h.angle);
     ctx.lineCap = 'round';
+    // 圓心後移 R → 弧的 U 底（紅點）落在敵人位置 (0,0)
+    const cx = -R, cy = 0;
     ctx.shadowColor = '#ffffff';
     ctx.shadowBlur = 28;
     ctx.strokeStyle = 'rgba(255,255,255,0.5)';
     ctx.lineWidth = 18;
     ctx.beginPath();
-    ctx.arc(0, 0, R, -Math.PI*0.7, Math.PI*0.7);
+    ctx.arc(cx, cy, R, -Math.PI*0.7, Math.PI*0.7);
     ctx.stroke();
     ctx.shadowBlur = 14;
     ctx.strokeStyle = 'rgba(255,255,255,0.95)';
     ctx.lineWidth = 8;
     ctx.beginPath();
-    ctx.arc(0, 0, R, -Math.PI*0.7, Math.PI*0.7);
+    ctx.arc(cx, cy, R, -Math.PI*0.7, Math.PI*0.7);
     ctx.stroke();
     ctx.shadowBlur = 4;
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.arc(0, 0, R, -Math.PI*0.7, Math.PI*0.7);
+    ctx.arc(cx, cy, R, -Math.PI*0.7, Math.PI*0.7);
     ctx.stroke();
     ctx.restore();
   }
@@ -838,27 +844,53 @@ function updateProjectiles(dt) {
 
 // drawSlashVisual 已移除 — 改用 drawSlashHits 畫在被打到的敵人身上
 
+// 剪刀原圖刀尖方向（經 PIL 測量：centroid→tip 角度 ≈ 145° = 2.535 rad）
+const SCISSOR_TIP_OFFSET = 2.535;
+
 function drawProjectile(p) {
   const isKid = p.source === 'kid';
-  const img = isKid ? imgs.scissor : imgs.boom;
-  if (img && img.complete && img.naturalWidth) {
-    const size = isKid ? 72 : 58;
+  if (isKid) {
     ctx.save();
     ctx.translate(p.x, p.y);
-    // 親親子剪刀：刀尖原圖朝下 (π/2)，rotate(angle - π/2) 讓刀尖對準飛行方向
-    const rot = isKid ? ((p.angle || 0) - Math.PI/2) : (performance.now() / 180 + (p.angle || 0));
-    ctx.rotate(rot);
-    ctx.shadowColor = isKid ? '#ffb3d1' : '#ffb04a';
-    ctx.shadowBlur = 18;
-    ctx.drawImage(img, -size/2, -size/2, size, size);
+    ctx.rotate(p.angle || 0);   // local +x = 飛行方向
+    // --- 白色靈氣拖尾（朝後拖） ---
+    ctx.shadowColor = '#ffffff';
+    ctx.shadowBlur = 28;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.beginPath();
+    ctx.ellipse(-18, 0, 60, 16, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.beginPath();
+    ctx.ellipse(-10, 0, 46, 9, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.shadowBlur = 5;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 32, 4, 0, 0, Math.PI*2);
+    ctx.fill();
+    // --- 剪刀圖 (刀尖補償到飛行方向) ---
+    const img = imgs.scissor;
+    if (img && img.complete && img.naturalWidth) {
+      const size = 72;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = '#fff';
+      ctx.rotate(-SCISSOR_TIP_OFFSET);   // 原圖刀尖 145° → 轉到 local +x (0°)
+      ctx.drawImage(img, -size/2, -size/2, size, size);
+    }
     ctx.restore();
   } else {
+    const img = imgs.boom;
+    const size = 58;
     ctx.save();
     ctx.translate(p.x, p.y);
-    ctx.fillStyle = p.color || '#ffb3d1';
-    ctx.beginPath();
-    ctx.arc(0, 0, 22, 0, Math.PI*2);
-    ctx.fill();
+    ctx.rotate(performance.now() / 180 + (p.angle || 0));
+    ctx.shadowColor = '#ffb04a';
+    ctx.shadowBlur = 18;
+    if (img && img.complete && img.naturalWidth) {
+      ctx.drawImage(img, -size/2, -size/2, size, size);
+    }
     ctx.restore();
   }
 }
@@ -1144,17 +1176,24 @@ function updateMinions(dt, now) {
       const d = Math.hypot(dx, dy) || 1;
       const touch = BB_HIT_R + e.r;
       if (d < touch) {
-        // 彈開：把敵人位移出碰撞圈外 + 多推 20px
         const nx = dx / d, ny = dy / d;
         const push = (touch - d) + 20;
-        if (e !== boss) { e.x += nx * push; e.y += ny * push; }
-        // 每個敵人 350ms 才能再被 bb 傷害一次，避免一 frame 秒殺
+        // 彈開：小怪全推、BOSS 只推一點點（避免 BOSS 飛太遠）
+        if (e === boss) {
+          e.x += nx * push * 0.35;
+          e.y += ny * push * 0.35;
+        } else {
+          e.x += nx * push;
+          e.y += ny * push;
+        }
+        // 連續傷害：同一敵人 350ms 一次；BOSS 傷害×3 讓累積有感
         e.bbHitUntil = e.bbHitUntil || 0;
         if (now >= e.bbHitUntil) {
-          e.hp -= 1;
-          e.hitFlash = 120;
+          const bbDmg = e === boss ? 3 : 1;
+          e.hp -= bbDmg;
+          e.hitFlash = 140;
           e.bbHitUntil = now + 350;
-          spawnParticles(bx, by, 3, '#ffb0b0');
+          spawnParticles(bx, by, 4, '#ffb0b0');
           if (e.hp <= 0 && e !== boss) onEnemyKill(e);
         }
       }
@@ -1182,11 +1221,11 @@ function updateMinions(dt, now) {
         projectiles.push({
           x: minionState.kidX, y: minionState.kidY,
           vx: (dx/d) * speed, vy: (dy/d) * speed,
-          life: 2000,
+          life: 2400,
           dmg: player.kidShootDamage || 3,
-          pierce: 1, r: 18,
+          pierce: 99, r: 18,            // 穿透所有敵人
           source: 'kid', hitIds: new Set(),
-          angle: Math.atan2(dy, dx), color: '#ffb3d1',
+          angle: Math.atan2(dy, dx), color: '#ffffff',
         });
         minionState.kidShootCooldown = player.kidShootInterval || 1500;
         playSfx('shoot', 0.45);
@@ -1510,6 +1549,8 @@ function finishUltScreen() {
   ultPhase = null;
   document.getElementById('ult-img').style.display = 'none';
   triggerShake(10, 300);
+  // 防禦：強制重置 last，避免下一幀 dt 異常讓玩家攻擊卡住
+  last = performance.now();
   state = 'play';
   if (bgm) bgm.volume = 0.3;
 }
@@ -1568,6 +1609,13 @@ function victory() {
     if (bgm) bgm.pause();
     spawnParticles(W/2, H/2, 120, '#ffd84d');
     playSfx('lvup', 1.0);
+    const vid = document.getElementById('outro');
+    if (vid) {
+      vid.style.display = 'block';
+      vid.currentTime = 0;
+      vid.volume = 1;
+      vid.play().catch(()=>{});
+    }
   } else {
     state = 'transition';
     transitionStart = performance.now();
@@ -1628,45 +1676,24 @@ function drawTransition() {
 }
 
 function drawFinalVictory() {
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.92)';
-  ctx.fillRect(0, 0, W, H);
+  // 影片播放中，不畫任何 canvas overlay（video 在上層蓋住）
+  const vid = document.getElementById('outro');
+  const vidDone = !vid || vid.ended || (vid.duration && vid.currentTime >= vid.duration - 0.05);
+  if (!vidDone) return;
+  // 影片結束後，顯示「按 SPACE 回主選單」提示
   const now = performance.now();
-  const pulse = 0.9 + Math.sin(now / 400) * 0.1;
+  const hintPulse = 0.55 + 0.45 * Math.sin(now / 280);
+  ctx.save();
+  ctx.globalAlpha = hintPulse;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  // 煙火粒子光
-  const g = ctx.createRadialGradient(W/2, H/2, 30, W/2, H/2, 600);
-  g.addColorStop(0, 'rgba(255, 215, 80, 0.25)');
-  g.addColorStop(1, 'rgba(255, 215, 80, 0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
-  // 主標
-  ctx.save();
-  ctx.fillStyle = '#ffd84d';
-  ctx.strokeStyle = '#000';
-  ctx.lineWidth = 12;
-  ctx.font = `bold ${Math.floor(140 * pulse)}px "Microsoft JhengHei"`;
-  ctx.strokeText('感 謝 試 玩', W/2, H/2 - 130);
-  ctx.fillText('感 謝 試 玩', W/2, H/2 - 130);
-  ctx.restore();
-  // 副標（秋季上市）
-  ctx.fillStyle = '#ff8b6a';
+  ctx.fillStyle = '#fff';
   ctx.strokeStyle = '#000';
   ctx.lineWidth = 6;
-  ctx.font = 'bold 58px "Microsoft JhengHei"';
-  ctx.strokeText('預計今年秋季上市 SWITCH', W/2, H/2 + 10);
-  ctx.fillText('預計今年秋季上市 SWITCH', W/2, H/2 + 10);
-  // 成績
-  ctx.fillStyle = '#cde';
-  ctx.font = 'bold 28px "Microsoft JhengHei"';
-  ctx.fillText(`擊殺 ${killCount}  ·  最終 Lv ${player.level}  ·  最後一關 ${elapsed.toFixed(1)}s`, W/2, H/2 + 110);
-  // 提示
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 30px "Microsoft JhengHei"';
-  const hintPulse = 0.55 + 0.45 * Math.sin(now / 280);
-  ctx.globalAlpha = hintPulse;
-  ctx.fillText('按 SPACE 回主選單', W/2, H/2 + 190);
-  ctx.globalAlpha = 1;
+  ctx.font = 'bold 42px "Microsoft JhengHei"';
+  ctx.strokeText('按 SPACE 回主選單', W/2, H - 80);
+  ctx.fillText('按 SPACE 回主選單', W/2, H - 80);
+  ctx.restore();
   ctx.textBaseline = 'alphabetic';
 }
 
@@ -1746,6 +1773,30 @@ function drawMenu() {
 // ============================================================================
 // Level up modal
 // ============================================================================
+function wrapTextLines(text, maxWidth) {
+  const lines = [];
+  let cur = '';
+  for (const ch of text) {
+    const test = cur + ch;
+    if (ctx.measureText(test).width > maxWidth && cur) {
+      lines.push(cur);
+      cur = ch;
+    } else {
+      cur = test;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+function fillWrapped(text, cxCenter, yTop, maxWidth, lineHeight) {
+  const lines = wrapTextLines(text, maxWidth);
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], cxCenter, yTop + i * lineHeight);
+  }
+  return lines.length;
+}
+
 function drawPassivePick() {
   ctx.fillStyle = 'rgba(0, 0, 0, 0.82)';
   ctx.fillRect(0, 0, W, H);
@@ -1781,8 +1832,8 @@ function drawPassivePick() {
     ctx.font = 'bold 22px "Microsoft JhengHei"';
     ctx.fillText(`等級 ${have}/${s.max}  →  ${have + 1}`, cx + cardW/2, cy + 110);
     ctx.fillStyle = '#fff';
-    ctx.font = '24px "Microsoft JhengHei"';
-    ctx.fillText(s.desc, cx + cardW/2, cy + 180);
+    ctx.font = '22px "Microsoft JhengHei"';
+    fillWrapped(s.desc, cx + cardW/2, cy + 170, cardW - 36, 28);
     ctx.fillStyle = '#3cf';
     ctx.font = 'bold 52px "Courier New"';
     ctx.fillText(`[${i+1}]`, cx + cardW/2, cy + cardH - 40);
@@ -1824,8 +1875,8 @@ function drawLevelUp() {
     ctx.font = 'bold 22px "Microsoft JhengHei"';
     ctx.fillText(`等級 ${have}/${s.max}  →  ${have + 1}`, cx + cardW/2, cy + 110);
     ctx.fillStyle = '#fff';
-    ctx.font = '24px "Microsoft JhengHei"';
-    ctx.fillText(s.desc, cx + cardW/2, cy + 180);
+    ctx.font = '22px "Microsoft JhengHei"';
+    fillWrapped(s.desc, cx + cardW/2, cy + 170, cardW - 36, 28);
     ctx.fillStyle = '#ffd84d';
     ctx.font = 'bold 52px "Courier New"';
     ctx.fillText(`[${i+1}]`, cx + cardW/2, cy + cardH - 40);
@@ -2059,6 +2110,9 @@ function goMenu() {
   state = 'menu';
   if (bgm) bgm.pause();
   if (menuBgm) menuBgm.play().catch(()=>{});
+  const vid = document.getElementById('outro');
+  if (vid) { vid.pause(); vid.style.display = 'none'; vid.currentTime = 0; }
+  document.getElementById('ult-img').style.display = 'none';
 }
 
 // ============================================================================
