@@ -718,21 +718,31 @@ function updateBoss(dt, now) {
         boss.shadowStart = now;
         const count = boss.shadowCount || 1;
         boss.shadows = [];
-        // 第一發鎖定玩家當下位置；其餘散落地圖（讓玩家有跑位空間）
+        const SHADOW_R = 169;
+        const MIN_CENTER_DIST = SHADOW_R * 2 + 10;   // 圓圈不互相重疊（留 10px 縫，玩家要精準鑽）
+        // 第一發鎖玩家位置；後續 rejection sample 避免疊在既有圓上
         for (let i = 0; i < count; i++) {
           let sx, sy;
           if (i === 0) {
-            sx = player.x;
-            sy = player.y;
+            sx = clamp(player.x, 80 + SHADOW_R, W - 80 - SHADOW_R);
+            sy = clamp(player.y, 80 + SHADOW_R, H - 80 - SHADOW_R);
           } else {
-            sx = 140 + Math.random() * (W - 280);
-            sy = 140 + Math.random() * (H - 280);
+            let tries = 0;
+            while (tries++ < 50) {
+              sx = 80 + SHADOW_R + Math.random() * (W - 2 * (80 + SHADOW_R));
+              sy = 80 + SHADOW_R + Math.random() * (H - 2 * (80 + SHADOW_R));
+              let ok = true;
+              for (const prev of boss.shadows) {
+                if (Math.hypot(sx - prev.x, sy - prev.y) < MIN_CENTER_DIST) { ok = false; break; }
+              }
+              if (ok) break;
+            }
           }
           boss.shadows.push({
-            x: clamp(sx, 80, W - 80),
-            y: clamp(sy, 80, H - 80),
-            r: 169,                              // 130 × 1.3
-            fallAt: now + 1500 + i * 550,         // 鎖定 1.5s
+            x: sx,
+            y: sy,
+            r: SHADOW_R,
+            fallAt: now + 1500,                   // 所有黑影同時落下 (+1.5s)
             fell: false,
           });
         }
