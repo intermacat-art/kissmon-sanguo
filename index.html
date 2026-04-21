@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>親親獸剪紙三國</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; user-select:none; }
+  html, body { width:100%; height:100%; background:#0a0a0a; overflow:hidden;
+               font-family:"Microsoft JhengHei","Noto Sans TC","Arial",sans-serif; }
+  body { display:flex; justify-content:center; align-items:center; }
+  #game { position:relative; width:1280px; height:720px; box-shadow:0 0 40px rgba(0,0,0,0.6); }
+  canvas { display:block; background:#2a1f1b; image-rendering:auto; }
+  #ult-img { position:absolute; top:0; left:0; width:100%; height:100%;
+             display:none; z-index:20; object-fit:cover; }
+  #loading { position:absolute; inset:0; display:flex; justify-content:center; align-items:center;
+             color:#fff; font-size:32px; background:#000; z-index:50; }
+</style>
+</head>
+<body>
+<div id="game">
+  <canvas id="canvas" width="1280" height="720"></canvas>
+  <img id="ult-img" src="a/ult/final.jpg">
+  <div id="loading">Loading...</div>
+</div>
+<script>
+// ============================================================================
+// Constants & Assets
+// ============================================================================
+const W = 1280, H = 720;
+const CANVAS = document.getElementById('canvas');
+const ctx = CANVAS.getContext('2d');
+
+const IMG_PATHS = {
+  menu1:'a/mon/menu1.png', menu2:'a/mon/menu2.png', menu3:'a/mon/menu3.png',
+  walk1:'a/mon/walk1.png', walk2:'a/mon/walk2.png', attack:'a/mon/attack.png',
+  heart:'a/item/heart.png', can:'a/item/can.png',
+  bb:'a/minion/bb.gif', kid:'a/minion/kid.gif',
+  rrrr:'a/dead/rrrr.png',
+  lv1:'a/enemy/lv1.png',
+};
+const SFX_PATHS = {
+  cut:'a/se/cut.aac', miss:'a/se/miss.aac', heal:'a/se/heal.aac',
+  dead:'a/se/dead.aac', ult:'a/se/ult.aac',
+  coin:'a/se/coin.mp3', lvup:'a/se/LVUP.mp3',
+};
+const BGM_SRC = 'a/bgm/bgm.mp3';
+
+const imgs = {};
+const sfx = {};
+let bgm = null;
+
+function loadAssets() {
+  const ps = [];
+  for (const k in IMG_PATHS) {
+    const im = new Image();
+    im.src = IMG_PATHS[k];
+    imgs[k] = im;
+    ps.push(new Promise(r => { im.onload = r; im.onerror = () => { console.warn('fail', IMG_PATHS[k]); r(); }; }));
+  }
+  for (const k in SFX_PATHS) {
+    const a = new Audio(SFX_PATHS[k]);
+    a.volume = 0.7;
+    sfx[k] = a;
+  }
+  bgm = new Audio(BGM_SRC);
+  bgm.loop = true;
+  bgm.volume = 0.3;
+  return Promise.all(ps);
+}
+
+function playSfx(k, vol = 1) {
+  try { const a = sfx[k].cloneNode(); a.volume = sfx[k].volume * vol; a.play(); } catch (e) {}
+}
+
+// ============================================================================
+// State
+// ============================================================================
+// states: loading, menu, play, levelup, ult, dying, dead, victory
+let state = 'loading';
+let last = 0;
+let keys = {};
+
+const player = {
+  x: W/2, y: H/2, r: 30,
+  hp: 4, maxHp: 4,
+  xp: 0, level: 1, xpNeeded: 3,
+  moveSpeed: 220,
+  attackInterval: 1000, attackCooldown: 0,
+  slashRange: 450,
+  slashDamage: 3,
+  slashPierce: 1,
+  canisters: 0, maxCanisters: 2,
+  iframeUntil: 0,
+  facing: 1,
+  walkPhase: 0,
+  attackUntil: 0,
+  skills: {},
+};
+
+let enemies = [];
+let projectiles = [];
+let pickups = [];
+let particles = [];
+let boss = null;
+let bossSpawned = false;
+let bossIntroStart = 0;
+
+let gameStartTime = 0;
+let elapsed = 0;
+let lastSpawn = 0;
+let lastPickupSpawn = 0;
+let killCount = 0;
+let entityId = 0;
+let levelUpChoices = [];
+let ultStartTime = 0;
+let dyingStart = 0;
+let redFade = 0;
+
+const SKILLS = {
+  range:  { name:'劍氣放大',    desc:'範圍 +20%',         max:5, apply:()=>{ player.slashRange *= 1.20; } },
+  speed:  { name:'揮舞如風',    desc:'攻速 +15%',         max:5, apply:()=>{ player.attackInterval *= 0.85; } },
+  dmg:    { name:'鋒銳之刃',    desc:'劍氣傷害 +1',       max:5, apply:()=>{ player.slashDamage += 1; } },
+  move:   { name:'走位風神',    desc:'移動速度 +12%',     max:3, apply:()=>{ player.moveSpeed *= 1.12; } },
+  pierce: { name:'穿透之鋒',    desc:'穿透敵人 +1',       max:3, apply:()=>{ player.slashPierce += 1; } },
+  hp:     { name:'體質強化',    desc:'血上限 +1 並回滿',  max:2, apply:()=>{ player.maxHp += 1; player.hp = player.maxHp; } },
+  ammo:   { name:'奧義罐包',    desc:'奧義罐上限 +1',     max:2, apply:()=>{ player.maxCanisters += 1; } },
+  bb:     { name:'波貝貝 支援', desc:'召喚穿透彈隨從',    max:1, apply:()=>{ player.skills.bb = 1; } },
+  kid:    { name:'親親子 支援', desc:'近戰旋轉隨從',      max:1, apply:()=>{ player.skills.kid = 1; } },
+};
+
+const LV = {
+  1: {
+    enemyImg: 'lv1',
+    enemyHp: 4,
+    enemySpeed: 130,
+    enemyDmg: 1,
+    bossHp: 150,
+    bossSpeed: 75,
+    bossTime: 80,
+    spawnCfg: [
+      { from: 0,  to: 20, interval: 1800, count: 1 },
+      { from: 20, to: 45, interval: 1250, count: 1 },
+      { from: 45, to: 70, interval: 900,  count: 1 },
+      { from: 70, to: 80, interval: 650,  count: 2 },
+    ],
+  },
+};
+let currentLevel = 1;
+
+const minionState = { bbCooldown: 0, kidAngle: 0, kidCooldown: 0 };
+
+// ============================================================================
+// Input
+// ============================================================================
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.repeat) return;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (state === 'menu') startGame();
+    else if (state === 'play') tryUlt();
+    else if (state === 'dead' || state === 'victory') goMenu();
+  } else if (state === 'levelup') {
+    if (e.code === 'Digit1' || e.code === 'Numpad1') chooseSkill(levelUpChoices[0]);
+    else if (e.code === 'Digit2' || e.code === 'Numpad2') { if (levelUpChoices[1]) chooseSkill(levelUpChoices[1]); }
+    else if (e.code === 'Digit3' || e.code === 'Numpad3') { if (levelUpChoices[2]) chooseSkill(levelUpChoices[2]); }
+  }
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+CANVAS.addEventListener('click', e => {
+  if (state !== 'levelup') return;
+  const rect = CANVAS.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (W / rect.width);
+  const my = (e.clientY - rect.top) * (H / rect.height);
+  const cardW = 310, cardH = 330, gap = 40;
+  const totalW = cardW * 3 + gap * 2;
+  const startX = (W - totalW) / 2;
+  const cy = 240;
+  for (let i = 0; i < levelUpChoices.length; i++) {
+    const cx = startX + i * (cardW + gap);
+    if (mx >= cx && mx <= cx + cardW && my >= cy && my <= cy + cardH) {
+      chooseSkill(levelUpChoices[i]);
+      return;
+    }
+  }
+});
+
+// ============================================================================
+// Player
+// ============================================================================
+function updatePlayer(dt, now) {
+  let vx = 0, vy = 0;
+  if (keys.KeyW || keys.ArrowUp) vy -= 1;
+  if (keys.KeyS || keys.ArrowDown) vy += 1;
+  if (keys.KeyA || keys.ArrowLeft)  { vx -= 1; player.facing = -1; }
+  if (keys.KeyD || keys.ArrowRight) { vx += 1; player.facing = 1; }
+  if (vx || vy) {
+    const l = Math.hypot(vx, vy);
+    player.x += (vx/l) * player.moveSpeed * dt/1000;
+    player.y += (vy/l) * player.moveSpeed * dt/1000;
+    player.walkPhase += dt / 180;
+  }
+  player.x = Math.max(40, Math.min(W - 40, player.x));
+  player.y = Math.max(60, Math.min(H - 40, player.y));
+
+  // auto attack
+  player.attackCooldown -= dt;
+  if (player.attackCooldown <= 0) {
+    const t = nearestEnemy();
+    if (t) {
+      fireSlash(player.x, player.y, t);
+      player.attackCooldown = player.attackInterval;
+      player.attackUntil = now + 220;
+    }
+  }
+
+  // level up queue (handled after XP intake in updatePickups)
+  if (state === 'play' && player.xp >= player.xpNeeded) {
+    player.xp -= player.xpNeeded;
+    player.level++;
+    player.xpNeeded = xpCurve(player.level);
+    triggerLevelUp();
+  }
+}
+
+function drawPlayer() {
+  const now = performance.now();
+  const attacking = now < player.attackUntil;
+  const moving = !!(keys.KeyW||keys.KeyA||keys.KeyS||keys.KeyD||keys.ArrowUp||keys.ArrowDown||keys.ArrowLeft||keys.ArrowRight);
+  let img;
+  if (attacking) img = imgs.attack;
+  else if (moving) img = (Math.floor(player.walkPhase) % 2 === 0) ? imgs.walk1 : imgs.walk2;
+  else img = imgs.walk1;
+  if (!img || !img.naturalWidth) return;
+  const w = 130;
+  const h = w * img.naturalHeight / img.naturalWidth;
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.scale(player.facing, 1);
+  if (now < player.iframeUntil) {
+    ctx.globalAlpha = (Math.floor(now/80) % 2) ? 0.4 : 1.0;
+  }
+  ctx.drawImage(img, -w/2, -h/2 - 8, w, h);
+  ctx.restore();
+}
+
+// ============================================================================
+// Enemies & Boss
+// ============================================================================
+function spawnEnemy(isBoss = false) {
+  const edge = (Math.random() * 4) | 0;
+  const m = 60;
+  let x, y;
+  if (edge === 0)      { x = -m;    y = Math.random() * H; }
+  else if (edge === 1) { x = W + m; y = Math.random() * H; }
+  else if (edge === 2) { x = Math.random() * W; y = -m; }
+  else                 { x = Math.random() * W; y = H + m; }
+
+  const cfg = LV[currentLevel];
+  const img = imgs[cfg.enemyImg];
+  if (isBoss) {
+    boss = {
+      id: ++entityId, x, y,
+      hp: cfg.bossHp, maxHp: cfg.bossHp,
+      speed: cfg.bossSpeed, r: 130,
+      img, type: 'boss',
+      w: 260, h: 260,
+      dmg: 2, hitFlash: 0,
+    };
+    bossSpawned = true;
+    bossIntroStart = performance.now();
+  } else {
+    enemies.push({
+      id: ++entityId, x, y,
+      hp: cfg.enemyHp, speed: cfg.enemySpeed,
+      r: 32, img, w: 70, h: 70,
+      dmg: cfg.enemyDmg, hitFlash: 0,
+      lastHitPlayer: 0,
+    });
+  }
+}
+
+function updateEnemies(dt, now) {
+  const all = boss ? enemies.concat(boss) : enemies;
+  for (const e of all) {
+    const dx = player.x - e.x, dy = player.y - e.y;
+    const d = Math.hypot(dx, dy) || 1;
+    if (d > 2) {
+      e.x += (dx/d) * e.speed * dt/1000;
+      e.y += (dy/d) * e.speed * dt/1000;
+    }
+    if (d < e.r + player.r && now > player.iframeUntil) {
+      hurtPlayer(e.dmg || 1, now);
+    }
+    if (e.hitFlash > 0) e.hitFlash -= dt;
+  }
+  enemies = enemies.filter(e => e.hp > 0);
+  if (boss && boss.hp <= 0 && state === 'play') victory();
+}
+
+function drawEnemy(e) {
+  if (!e.img || !e.img.naturalWidth) return;
+  ctx.save();
+  if (e.hitFlash > 0) {
+    ctx.shadowColor = '#ff4040';
+    ctx.shadowBlur = 28;
+  }
+  ctx.drawImage(e.img, e.x - e.w/2, e.y - e.h/2, e.w, e.h);
+  ctx.restore();
+}
+
+// ============================================================================
+// Projectiles (player slash + minion bb)
+// ============================================================================
+function nearestEnemy() {
+  let best = null, bestD = Infinity;
+  const all = boss ? enemies.concat(boss) : enemies;
+  for (const e of all) {
+    const d = Math.hypot(e.x - player.x, e.y - player.y);
+    if (d < bestD && d < player.slashRange) { bestD = d; best = e; }
+  }
+  return best;
+}
+
+function fireSlash(sx, sy, target) {
+  const dx = target.x - sx, dy = target.y - sy;
+  const d = Math.hypot(dx, dy) || 1;
+  const speed = 720;
+  projectiles.push({
+    x: sx, y: sy,
+    vx: (dx/d) * speed, vy: (dy/d) * speed,
+    life: 1200,
+    dmg: player.slashDamage,
+    pierce: player.slashPierce,
+    r: 30,
+    source: 'player',
+    hitIds: new Set(),
+    angle: Math.atan2(dy, dx),
+    color: '#ffed7a',
+  });
+  playSfx('cut', 0.7);
+}
+
+function updateProjectiles(dt) {
+  const all = boss ? enemies.concat(boss) : enemies;
+  for (const p of projectiles) {
+    p.x += p.vx * dt/1000;
+    p.y += p.vy * dt/1000;
+    p.life -= dt;
+    for (const e of all) {
+      if (p.hitIds.has(e.id)) continue;
+      const d = Math.hypot(e.x - p.x, e.y - p.y);
+      if (d < e.r + p.r) {
+        e.hp -= p.dmg;
+        e.hitFlash = 160;
+        p.hitIds.add(e.id);
+        spawnParticles(p.x, p.y, 6, '#fffacd');
+        if (p.pierce <= 0) { p.life = 0; break; }
+        p.pierce--;
+        if (e.hp <= 0 && e !== boss) onEnemyKill(e);
+      }
+    }
+  }
+  projectiles = projectiles.filter(p =>
+    p.life > 0 && p.x > -120 && p.x < W + 120 && p.y > -120 && p.y < H + 120);
+}
+
+function drawProjectile(p) {
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(p.angle);
+  ctx.shadowColor = p.color;
+  ctx.shadowBlur = 22;
+  ctx.fillStyle = p.color;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 40, 14, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ============================================================================
+// Pickups: xp, heart, canister
+// ============================================================================
+function dropXp(x, y, amount = 1) {
+  pickups.push({ type:'xp', x, y, amount, r:10,
+    vx:(Math.random()-0.5)*120, vy:(Math.random()-0.5)*120 });
+}
+function dropHeart(x, y)  { pickups.push({ type:'heart', x, y, r:22, vx:0, vy:0 }); }
+function dropCan(x, y)    { pickups.push({ type:'can',   x, y, r:24, vx:0, vy:0 }); }
+
+function updatePickups(dt) {
+  const MAGNET = 110;
+  for (const p of pickups) {
+    if (p.type === 'xp') {
+      const dx = player.x - p.x, dy = player.y - p.y;
+      const d = Math.hypot(dx, dy);
+      if (d < MAGNET) {
+        const f = 900 * (1 - d/MAGNET);
+        p.vx += (dx/(d||1)) * f * dt/1000;
+        p.vy += (dy/(d||1)) * f * dt/1000;
+      }
+    }
+    p.x += p.vx * dt/1000;
+    p.y += p.vy * dt/1000;
+    p.vx *= 0.92; p.vy *= 0.92;
+    const d = Math.hypot(p.x - player.x, p.y - player.y);
+    if (d < player.r + p.r) { onPickup(p); p.picked = true; }
+  }
+  pickups = pickups.filter(p => !p.picked);
+}
+
+function onPickup(p) {
+  if (p.type === 'xp') {
+    player.xp += p.amount;
+    spawnParticles(player.x, player.y, 4, '#6af');
+    playSfx('coin', 0.5);
+  } else if (p.type === 'heart') {
+    if (player.hp < player.maxHp) {
+      player.hp++;
+      playSfx('heal');
+      spawnHeartGain();
+    }
+  } else if (p.type === 'can') {
+    if (player.canisters < player.maxCanisters) {
+      player.canisters++;
+      playSfx('heal', 0.6);
+      spawnParticles(player.x, player.y, 14, '#0cf');
+    }
+  }
+}
+
+function drawPickup(p) {
+  if (p.type === 'xp') {
+    ctx.save();
+    ctx.shadowColor = '#4af'; ctx.shadowBlur = 14;
+    ctx.fillStyle = '#4df';
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.restore();
+  } else if (p.type === 'heart' && imgs.heart.complete) {
+    const pulse = Math.sin(performance.now()/180) * 0.08 + 1;
+    const s = 46 * pulse;
+    ctx.save();
+    ctx.shadowColor = '#f66'; ctx.shadowBlur = 18;
+    ctx.drawImage(imgs.heart, p.x - s/2, p.y - s/2, s, s);
+    ctx.restore();
+  } else if (p.type === 'can' && imgs.can.complete) {
+    const pulse = Math.sin(performance.now()/180) * 0.08 + 1;
+    const s = 56 * pulse;
+    ctx.save();
+    ctx.shadowColor = '#0cf'; ctx.shadowBlur = 18;
+    ctx.drawImage(imgs.can, p.x - s/2, p.y - s/2, s, s);
+    ctx.restore();
+  }
+}
+
+// ============================================================================
+// Particles
+// ============================================================================
+function spawnParticles(x, y, n, color) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const v = 60 + Math.random() * 160;
+    particles.push({
+      x, y,
+      vx: Math.cos(a)*v, vy: Math.sin(a)*v,
+      color, r: 2 + Math.random() * 3,
+      life: 400 + Math.random() * 200,
+      born: performance.now(), gravity: 200,
+    });
+  }
+}
+
+function spawnHeartGain() {
+  for (let i = 0; i < 12; i++) {
+    const a = Math.random() * Math.PI * 2;
+    particles.push({
+      x: player.x + Math.cos(a)*16, y: player.y + Math.sin(a)*16,
+      vx: Math.cos(a)*30, vy: -80 - Math.random()*70,
+      color: '#ff4e6a', r: 4 + Math.random()*3,
+      life: 700, born: performance.now(), gravity: -60,
+    });
+  }
+}
+
+function spawnHeartLose() {
+  for (let i = 0; i < 20; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const v = 110 + Math.random() * 200;
+    particles.push({
+      x: player.x, y: player.y - 20,
+      vx: Math.cos(a)*v, vy: Math.sin(a)*v - 100,
+      color: '#c81835', r: 3 + Math.random()*4,
+      life: 600, born: performance.now(), gravity: 300,
+    });
+  }
+}
+
+function updateParticles(dt) {
+  const now = performance.now();
+  for (const p of particles) {
+    p.x += p.vx * dt/1000;
+    p.y += p.vy * dt/1000;
+    p.vy += (p.gravity || 200) * dt/1000;
+    p.vx *= 0.98;
+  }
+  particles = particles.filter(p => now - p.born < p.life);
+}
+
+function drawParticles() {
+  const now = performance.now();
+  for (const p of particles) {
+    const t = (now - p.born) / p.life;
+    ctx.globalAlpha = Math.max(0, 1 - t);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================================
+// Minions
+// ============================================================================
+function updateMinions(dt, now) {
+  if (player.skills.bb) {
+    minionState.bbCooldown -= dt;
+    if (minionState.bbCooldown <= 0) {
+      const t = nearestEnemy();
+      if (t) {
+        const dx = t.x - player.x, dy = t.y - player.y;
+        const d = Math.hypot(dx, dy) || 1;
+        projectiles.push({
+          x: player.x - 50, y: player.y - 20,
+          vx: (dx/d) * 560, vy: (dy/d) * 560,
+          life: 2400, dmg: 2, pierce: 99, r: 20,
+          source: 'bb', hitIds: new Set(),
+          angle: Math.atan2(dy, dx), color: '#ffb0b0',
+        });
+        minionState.bbCooldown = 1500;
+      }
+    }
+  }
+  if (player.skills.kid) {
+    minionState.kidAngle += dt * 0.003;
+    const orbR = 95;
+    const kx = player.x + Math.cos(minionState.kidAngle) * orbR;
+    const ky = player.y + Math.sin(minionState.kidAngle) * orbR;
+    minionState.kidCooldown -= dt;
+    const all = boss ? enemies.concat(boss) : enemies;
+    for (const e of all) {
+      const d = Math.hypot(e.x - kx, e.y - ky);
+      if (d < 50 + e.r && minionState.kidCooldown <= 0) {
+        e.hp -= 1;
+        e.hitFlash = 120;
+        spawnParticles(e.x, e.y, 4, '#fbd');
+        if (e.hp <= 0 && e !== boss) onEnemyKill(e);
+        minionState.kidCooldown = 260;
+        break;
+      }
+    }
+  }
+}
+
+function drawMinions() {
+  const t = performance.now() / 800;
+  if (player.skills.bb && imgs.bb.complete) {
+    const x = player.x - 90 + Math.sin(t) * 6;
+    const y = player.y - 50 + Math.cos(t) * 6;
+    ctx.drawImage(imgs.bb, x - 40, y - 40, 80, 80);
+  }
+  if (player.skills.kid && imgs.kid.complete) {
+    const orbR = 95;
+    const kx = player.x + Math.cos(minionState.kidAngle) * orbR;
+    const ky = player.y + Math.sin(minionState.kidAngle) * orbR;
+    ctx.drawImage(imgs.kid, kx - 40, ky - 40, 80, 80);
+  }
+}
+
+// ============================================================================
+// Spawner
+// ============================================================================
+function updateSpawner(dt, now) {
+  const cfg = LV[currentLevel];
+  if (!bossSpawned && elapsed >= cfg.bossTime) {
+    enemies = [];  // clear mobs when boss appears
+    spawnEnemy(true);
+  }
+  if (!bossSpawned) {
+    let wave = null;
+    for (const w of cfg.spawnCfg) {
+      if (elapsed >= w.from && elapsed < w.to) { wave = w; break; }
+    }
+    if (wave && now - lastSpawn > wave.interval) {
+      lastSpawn = now;
+      for (let i = 0; i < wave.count; i++) spawnEnemy();
+    }
+  }
+  if (now - lastPickupSpawn > 22000) {
+    lastPickupSpawn = now;
+    const type = Math.random() < 0.55 ? 'heart' : 'can';
+    pickups.push({
+      type, r: type === 'heart' ? 22 : 24,
+      x: 100 + Math.random() * (W - 200),
+      y: 120 + Math.random() * (H - 240),
+      vx: 0, vy: 0,
+    });
+  }
+}
+
+// ============================================================================
+// Combat events
+// ============================================================================
+function onEnemyKill(e) {
+  killCount++;
+  const r = Math.random();
+  if (r < 0.05) dropHeart(e.x, e.y);
+  else if (r < 0.10) dropCan(e.x, e.y);
+  else dropXp(e.x, e.y, 1);
+  spawnParticles(e.x, e.y, 8, '#ffee7a');
+}
+
+function hurtPlayer(dmg, now) {
+  if (state !== 'play') return;
+  player.hp -= dmg;
+  player.iframeUntil = now + 800;
+  spawnHeartLose();
+  playSfx('miss', 0.7);
+  if (player.hp <= 0) { player.hp = 0; startDying(now); }
+}
+
+// ============================================================================
+// Level up
+// ============================================================================
+function xpCurve(lv) {
+  return Math.floor(3 + (lv - 1) * 2 + Math.pow(lv - 1, 1.5) * 1.5);
+}
+
+function triggerLevelUp() {
+  state = 'levelup';
+  const pool = [];
+  for (const k in SKILLS) {
+    const have = player.skills[k] || 0;
+    if (have < SKILLS[k].max) pool.push(k);
+  }
+  pool.sort(() => Math.random() - 0.5);
+  levelUpChoices = pool.slice(0, 3);
+  if (bgm) bgm.volume = 0.1;
+  playSfx('lvup', 0.9);
+}
+
+function chooseSkill(k) {
+  if (!k) return;
+  SKILLS[k].apply();
+  player.skills[k] = (player.skills[k] || 0) + 1;
+  spawnParticles(player.x, player.y, 25, '#ffd84d');
+  if (player.xp >= player.xpNeeded) {
+    player.xp -= player.xpNeeded;
+    player.level++;
+    player.xpNeeded = xpCurve(player.level);
+    triggerLevelUp();
+  } else {
+    state = 'play';
+    if (bgm) bgm.volume = 0.3;
+  }
+}
+
+// ============================================================================
+// Ult
+// ============================================================================
+function tryUlt() {
+  if (player.canisters <= 0) return;
+  player.canisters--;
+  state = 'ult';
+  ultStartTime = performance.now();
+  document.getElementById('ult-img').style.display = 'block';
+  playSfx('ult', 1.0);
+  if (bgm) bgm.volume = 0.05;
+}
+
+function finishUltScreen() {
+  document.getElementById('ult-img').style.display = 'none';
+  for (const e of enemies) {
+    spawnParticles(e.x, e.y, 22, '#fc4');
+    dropXp(e.x, e.y, 2);
+    killCount++;
+  }
+  enemies = [];
+  if (boss) {
+    const dmg = Math.floor(boss.maxHp * 0.3);
+    boss.hp = Math.max(1, boss.hp - dmg);   // cannot kill boss
+    boss.hitFlash = 300;
+    spawnParticles(boss.x, boss.y, 50, '#ff4');
+  }
+  state = 'play';
+  if (bgm) bgm.volume = 0.3;
+}
+
+// ============================================================================
+// Dying / Dead / Victory
+// ============================================================================
+function startDying(now) {
+  state = 'dying';
+  dyingStart = now;
+  redFade = 0;
+  if (bgm) bgm.pause();
+  playSfx('dead', 1.0);
+}
+
+function updateDying(dt, now) {
+  const t = (now - dyingStart) / 1800;
+  redFade = Math.min(1, t);
+  if (t >= 1) state = 'dead';
+}
+
+function drawDyingOverlay() {
+  if (redFade <= 0) return;
+  if (redFade < 0.55) {
+    ctx.fillStyle = `rgba(200, 20, 20, ${redFade * 1.1})`;
+  } else {
+    ctx.fillStyle = `rgba(0,0,0, ${(redFade - 0.45) * 1.8})`;
+  }
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawDead() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  const r = imgs.rrrr;
+  if (r && r.complete && r.naturalWidth) {
+    const scale = Math.min(W*0.78 / r.naturalWidth, H*0.68 / r.naturalHeight);
+    const w = r.naturalWidth * scale;
+    const h = r.naturalHeight * scale;
+    ctx.drawImage(r, (W-w)/2, (H-h)/2 - 30, w, h);
+  }
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 4;
+  ctx.font = 'bold 40px "Microsoft JhengHei"';
+  ctx.textAlign = 'center';
+  ctx.strokeText('按 SPACE 重新開始', W/2, H - 60);
+  ctx.fillText('按 SPACE 重新開始', W/2, H - 60);
+}
+
+function victory() {
+  state = 'victory';
+  if (bgm) bgm.pause();
+  spawnParticles(W/2, H/2, 80, '#ffd84d');
+}
+
+function drawVictory() {
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd84d';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 6;
+  ctx.font = 'bold 96px "Microsoft JhengHei"';
+  ctx.strokeText('第一關 通關', W/2, H/2 - 80);
+  ctx.fillText('第一關 通關', W/2, H/2 - 80);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 36px "Microsoft JhengHei"';
+  ctx.fillText(`存活 ${elapsed.toFixed(1)} 秒 · 擊殺 ${killCount}`, W/2, H/2 + 10);
+  ctx.fillStyle = '#8f8';
+  ctx.font = 'bold 32px "Microsoft JhengHei"';
+  ctx.fillText('按 SPACE 回主選單', W/2, H/2 + 90);
+}
+
+// ============================================================================
+// Menu / Background
+// ============================================================================
+function drawBg() {
+  ctx.fillStyle = '#3a2d24';
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(255,220,160,0.05)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 48) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for (let y = 0; y < H; y += 48) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+}
+
+function drawMenu() {
+  drawBg();
+  const t = performance.now();
+  const phase = Math.floor(t / 180) % 3;
+  const img = phase === 0 ? imgs.menu1 : phase === 1 ? imgs.menu2 : imgs.menu3;
+  if (img && img.complete && img.naturalWidth) {
+    const scale = Math.min(420 / img.naturalWidth, 420 / img.naturalHeight);
+    const w = img.naturalWidth * scale;
+    const h = img.naturalHeight * scale;
+    ctx.drawImage(img, 60, H/2 - h/2 - 40, w, h);
+  }
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 6;
+  ctx.font = 'bold 104px "Microsoft JhengHei"';
+  ctx.textAlign = 'left';
+  ctx.strokeText('親親獸', 560, 240);
+  ctx.fillText('親親獸', 560, 240);
+  ctx.strokeText('剪紙三國', 560, 360);
+  ctx.fillText('剪紙三國', 560, 360);
+  ctx.fillStyle = '#ffd84d';
+  ctx.font = 'bold 32px "Microsoft JhengHei"';
+  ctx.fillText('— 一人對抗三國 —', 560, 410);
+  const pulse = 0.6 + 0.4 * Math.sin(t/320);
+  ctx.fillStyle = `rgba(255,240,120,${pulse})`;
+  ctx.font = 'bold 46px "Microsoft JhengHei"';
+  ctx.fillText('按 SPACE 開始', 560, 540);
+  ctx.fillStyle = '#ccc';
+  ctx.font = '22px "Microsoft JhengHei"';
+  ctx.fillText('WASD / 方向鍵 移動   SPACE 奧義（累積罐頭後釋放）', 560, 600);
+}
+
+// ============================================================================
+// Level up modal
+// ============================================================================
+function drawLevelUp() {
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd84d';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 5;
+  ctx.font = 'bold 70px "Microsoft JhengHei"';
+  ctx.strokeText(`LEVEL ${player.level}`, W/2, 120);
+  ctx.fillText(`LEVEL ${player.level}`, W/2, 120);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 30px "Microsoft JhengHei"';
+  ctx.fillText('選擇強化（點卡片 或 按 1/2/3）', W/2, 175);
+
+  const cardW = 310, cardH = 330, gap = 40;
+  const totalW = cardW * 3 + gap * 2;
+  const startX = (W - totalW) / 2;
+  const cy = 240;
+  for (let i = 0; i < levelUpChoices.length; i++) {
+    const k = levelUpChoices[i];
+    const s = SKILLS[k];
+    const cx = startX + i * (cardW + gap);
+    ctx.fillStyle = 'rgba(40, 30, 55, 0.95)';
+    ctx.fillRect(cx, cy, cardW, cardH);
+    ctx.strokeStyle = '#ffd84d';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(cx, cy, cardW, cardH);
+    ctx.fillStyle = '#ffd84d';
+    ctx.font = 'bold 36px "Microsoft JhengHei"';
+    ctx.fillText(s.name, cx + cardW/2, cy + 70);
+    const have = player.skills[k] || 0;
+    ctx.fillStyle = '#aaf';
+    ctx.font = 'bold 22px "Microsoft JhengHei"';
+    ctx.fillText(`等級 ${have}/${s.max}  →  ${have + 1}`, cx + cardW/2, cy + 110);
+    ctx.fillStyle = '#fff';
+    ctx.font = '24px "Microsoft JhengHei"';
+    ctx.fillText(s.desc, cx + cardW/2, cy + 180);
+    ctx.fillStyle = '#ffd84d';
+    ctx.font = 'bold 52px "Courier New"';
+    ctx.fillText(`[${i+1}]`, cx + cardW/2, cy + cardH - 40);
+  }
+}
+
+// ============================================================================
+// HUD
+// ============================================================================
+function drawHud() {
+  // hearts
+  if (imgs.heart.complete) {
+    for (let i = 0; i < player.maxHp; i++) {
+      ctx.save();
+      if (i >= player.hp) ctx.globalAlpha = 0.22;
+      ctx.drawImage(imgs.heart, 24 + i * 52, 24, 46, 46);
+      ctx.restore();
+    }
+  }
+  // canisters below hearts
+  if (imgs.can.complete) {
+    for (let i = 0; i < player.maxCanisters; i++) {
+      ctx.save();
+      if (i >= player.canisters) ctx.globalAlpha = 0.22;
+      ctx.drawImage(imgs.can, 24 + i * 52, 82, 46, 46);
+      ctx.restore();
+    }
+  }
+  // timer top-right
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 4;
+  ctx.font = 'bold 42px "Courier New"';
+  const m = Math.floor(elapsed/60), s = Math.floor(elapsed%60);
+  const timeStr = `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  ctx.strokeText(timeStr, W - 24, 54);
+  ctx.fillText(timeStr, W - 24, 54);
+  ctx.fillStyle = '#ffd84d';
+  ctx.font = 'bold 28px "Microsoft JhengHei"';
+  ctx.strokeText(`Lv ${player.level}`, W - 24, 92);
+  ctx.fillText(`Lv ${player.level}`, W - 24, 92);
+  // XP bar bottom
+  const bw = W - 80, bx = 40, by = H - 26;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(bx, by, bw, 14);
+  const frac = Math.min(1, player.xp / player.xpNeeded);
+  ctx.fillStyle = '#4df';
+  ctx.fillRect(bx, by, bw * frac, 14);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bx, by, bw, 14);
+  // boss HP bar
+  if (boss && boss.hp > 0) {
+    const bpW = 780, bpH = 30;
+    const bpX = (W - bpW) / 2, bpY = 22;
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(bpX, bpY, bpW, bpH);
+    const hf = Math.max(0, boss.hp / boss.maxHp);
+    ctx.fillStyle = '#e22';
+    ctx.fillRect(bpX, bpY, bpW * hf, bpH);
+    ctx.strokeStyle = '#ffd84d';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(bpX, bpY, bpW, bpH);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 22px "Microsoft JhengHei"';
+    ctx.fillText(`BOSS ${Math.ceil(boss.hp)}/${boss.maxHp}`, W/2, bpY + 22);
+  }
+}
+
+function drawBossIntro() {
+  if (!bossSpawned || !boss) return;
+  const t = performance.now() - bossIntroStart;
+  if (t > 2000) return;
+  const frac = t / 2000;
+  const alpha = frac < 0.3 ? frac/0.3 : frac > 0.8 ? (1 - frac)/0.2 : 1;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, H/2 - 100, W, 200);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 130px "Microsoft JhengHei"';
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 8;
+  ctx.fillStyle = '#ff3030';
+  ctx.strokeText('BOSS 登場', W/2, H/2);
+  ctx.fillText('BOSS 登場', W/2, H/2);
+  ctx.restore();
+  ctx.textBaseline = 'alphabetic';
+}
+
+// ============================================================================
+// Draw main
+// ============================================================================
+function drawGame() {
+  drawBg();
+  drawParticles();
+  for (const p of pickups) drawPickup(p);
+  for (const e of enemies) drawEnemy(e);
+  if (boss) drawEnemy(boss);
+  for (const p of projectiles) drawProjectile(p);
+  drawPlayer();
+  drawMinions();
+  drawHud();
+  drawBossIntro();
+}
+
+// ============================================================================
+// Game flow
+// ============================================================================
+function startGame() {
+  resetGame();
+  state = 'play';
+  if (bgm) { bgm.currentTime = 0; bgm.play().catch(()=>{}); }
+}
+
+function resetGame() {
+  player.x = W/2; player.y = H/2;
+  player.hp = 4; player.maxHp = 4;
+  player.xp = 0; player.level = 1; player.xpNeeded = xpCurve(1);
+  player.moveSpeed = 220;
+  player.attackInterval = 1000; player.attackCooldown = 0;
+  player.slashRange = 450; player.slashDamage = 3; player.slashPierce = 1;
+  player.canisters = 0; player.maxCanisters = 2;
+  player.iframeUntil = 0;
+  player.skills = {};
+  player.facing = 1;
+  enemies = []; projectiles = []; pickups = []; particles = [];
+  boss = null; bossSpawned = false;
+  gameStartTime = performance.now();
+  elapsed = 0;
+  lastSpawn = 0;
+  lastPickupSpawn = performance.now();
+  killCount = 0;
+  levelUpChoices = [];
+  minionState.bbCooldown = 0;
+  minionState.kidAngle = 0;
+  minionState.kidCooldown = 0;
+  document.getElementById('ult-img').style.display = 'none';
+}
+
+function goMenu() {
+  state = 'menu';
+  if (bgm) bgm.pause();
+}
+
+// ============================================================================
+// Main loop
+// ============================================================================
+function mainLoop(now) {
+  const dt = Math.min(50, now - last);
+  last = now;
+  const pnow = performance.now();
+
+  if (state === 'play') {
+    elapsed = (pnow - gameStartTime) / 1000;
+    updatePlayer(dt, pnow);
+    updateSpawner(dt, pnow);
+    updateEnemies(dt, pnow);
+    updateProjectiles(dt);
+    updatePickups(dt);
+    updateMinions(dt, pnow);
+    updateParticles(dt);
+  } else if (state === 'dying') {
+    updateDying(dt, pnow);
+    updateParticles(dt);
+  } else if (state === 'ult') {
+    if (pnow - ultStartTime > 2600) finishUltScreen();
+  } else if (state === 'levelup') {
+    gameStartTime += dt;       // freeze elapsed
+    lastSpawn += dt;
+    lastPickupSpawn += dt;
+    updateParticles(dt);
+  }
+
+  if (state === 'loading') {
+    // loading overlay handles visual
+  } else if (state === 'menu') {
+    drawMenu();
+  } else if (state === 'play' || state === 'levelup' || state === 'ult' || state === 'dying') {
+    drawGame();
+    if (state === 'levelup') drawLevelUp();
+    if (state === 'dying') drawDyingOverlay();
+  } else if (state === 'dead') {
+    drawDead();
+  } else if (state === 'victory') {
+    drawGame();
+    drawVictory();
+  }
+
+  requestAnimationFrame(mainLoop);
+}
+
+// ============================================================================
+// Init
+// ============================================================================
+loadAssets().then(() => {
+  document.getElementById('loading').style.display = 'none';
+  state = 'menu';
+  last = performance.now();
+  requestAnimationFrame(mainLoop);
+});
+</script>
+</body>
+</html>
