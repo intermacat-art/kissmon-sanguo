@@ -1231,10 +1231,14 @@ function updateMinions(dt, now) {
     const fy = Math.cos(minionState.kidFloat * 0.7) * 6;
     minionState.kidX = player.x + offsetX + fx;
     minionState.kidY = player.y + offsetY + fy;
-    // 射擊 cooldown
+    // 射擊 cooldown — 親親子鎖定全場最近敵人（不受玩家 slashRange 限制）
     minionState.kidShootCooldown = (minionState.kidShootCooldown || 0) - dt;
     if (minionState.kidShootCooldown <= 0) {
-      const t = nearestEnemy();
+      let t = null, bestD = Infinity;
+      for (const e of allTargets()) {
+        const d = Math.hypot(e.x - minionState.kidX, e.y - minionState.kidY);
+        if (d < bestD) { bestD = d; t = e; }
+      }
       if (t) {
         const dx = t.x - minionState.kidX;
         const dy = t.y - minionState.kidY;
