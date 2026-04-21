@@ -176,6 +176,7 @@ let particles = [];
 let deathAnims = [];   // 敵人切半紙片動畫
 let hitFx = [];        // BOSS 命中玩家「快速斬」特效
 let slashHits = [];    // 玩家白弧斬擊命中敵人特效
+let critLabels = [];   // 暴擊時跳出的「暴擊!」金字
 let boss = null;
 let bossSpawned = false;
 let bossIntroStart = 0;
@@ -380,6 +381,11 @@ addEventListener('keydown', e => {
   }
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
+
+// 切分頁 / 視窗失焦時清空所有按鍵狀態，避免 keyup 被吃掉導致方向鍵卡住
+function clearAllKeys() { for (const k in keys) keys[k] = false; }
+window.addEventListener('blur', clearAllKeys);
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearAllKeys(); });
 
 CANVAS.addEventListener('click', e => {
   tryPlayMenuBgm();
@@ -640,11 +646,19 @@ function updateBoss(dt, now) {
         boss.shadowStart = now;
         const count = boss.shadowCount || 1;
         boss.shadows = [];
+        // 第一發鎖定玩家當下位置；其餘散落地圖（讓玩家有跑位空間）
         for (let i = 0; i < count; i++) {
-          const off = i === 0 ? { x: 0, y: 0 } : { x: (Math.random() - 0.5) * 200, y: (Math.random() - 0.5) * 140 };
+          let sx, sy;
+          if (i === 0) {
+            sx = player.x;
+            sy = player.y;
+          } else {
+            sx = 140 + Math.random() * (W - 280);
+            sy = 140 + Math.random() * (H - 280);
+          }
           boss.shadows.push({
-            x: clamp(player.x + off.x, 80, W - 80),
-            y: clamp(player.y + off.y, 80, H - 80),
+            x: clamp(sx, 80, W - 80),
+            y: clamp(sy, 80, H - 80),
             r: 130,
             fallAt: now + 2000 + i * 550,
             fell: false,
@@ -889,6 +903,7 @@ function performSlash(now) {
       e.hp -= dmg;
       e.hitFlash = crit ? 220 : 160;
       spawnParticles(e.x, e.y, crit ? 10 : 6, crit ? '#ffd84d' : '#ffe8c8');
+      if (crit) critLabels.push({ x: e.x, y: e.y - 20, start: now });
       // 每個被打到的敵人身上各加一個白弧斬擊特效
       const aimAngle = Math.atan2(e.y - player.y, e.x - player.x);
       slashHits.push({
@@ -902,6 +917,35 @@ function performSlash(now) {
     }
   }
   playSfx('cut', anyHit ? 0.8 : 0.35);
+}
+
+function drawCritLabels() {
+  const now = performance.now();
+  const DUR = 650;
+  if (critLabels.length === 0) return;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const c of critLabels) {
+    const t = (now - c.start) / DUR;
+    if (t >= 1) continue;
+    const y = c.y - 20 - t * 55;          // 向上飛
+    const alpha = t < 0.65 ? 1 : Math.max(0, 1 - (t - 0.65) / 0.35);
+    const scale = 0.85 + t * 0.6;
+    const wobble = Math.sin(t * Math.PI * 4) * 3;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(c.x + wobble, y);
+    ctx.scale(scale, scale);
+    ctx.strokeStyle = '#8b0000';
+    ctx.lineWidth = 7;
+    ctx.fillStyle = '#ffd84d';
+    ctx.font = 'bold 38px "Microsoft JhengHei"';
+    ctx.strokeText('暴擊!', 0, 0);
+    ctx.fillText('暴擊!', 0, 0);
+    ctx.restore();
+  }
+  ctx.textBaseline = 'alphabetic';
+  critLabels = critLabels.filter(c => (now - c.start) < DUR);
 }
 
 function drawSlashHits() {
@@ -2267,6 +2311,7 @@ function drawGame() {
   drawPlayer();
   drawSlashHits();
   drawHitFx();
+  drawCritLabels();
   if (state === 'ult') drawUltEffect();
   ctx.restore();
   // HUD 不受 shake 影響
