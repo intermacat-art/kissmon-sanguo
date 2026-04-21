@@ -594,10 +594,18 @@ function updateBoss(dt, now) {
       } else {
         boss.x = boss.dashFromX + (boss.dashEndX - boss.dashFromX) * t;
         boss.y = boss.dashFromY + (boss.dashEndY - boss.dashFromY) * t;
+        // 衝刺軌跡拖尾：每 55ms 在 boss 當前位置 spawn 一個 hit 特效（快速斬視覺）
+        if (!boss.lastDashFxAt || now - boss.lastDashFxAt > 55) {
+          spawnHitFx(boss.x + (Math.random()-0.5)*40, boss.y + (Math.random()-0.5)*40);
+          boss.lastDashFxAt = now;
+        }
         const d = Math.hypot(player.x - boss.x, player.y - boss.y);
         if (d < boss.r + player.r && now > player.iframeUntil) {
           hurtPlayer(2, now);
+          // 命中玩家時 spawn 兩個更大的 hit fx（連環快速斬）
           spawnHitFx(player.x, player.y);
+          spawnHitFx(player.x + 30, player.y - 20);
+          triggerShake(8, 200);
         }
       }
       break;
