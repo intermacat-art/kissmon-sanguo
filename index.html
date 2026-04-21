@@ -49,7 +49,7 @@ const ctx = CANVAS.getContext('2d');
 
 const IMG_PATHS = {
   bg:'a/battle.jpg', flags:'a/flags.png', menu_bg:'a/menu_bg.jpg',
-  boom:'a/boom.png', hit:'a/hit.png',
+  boom:'a/boom.png', hit:'a/hit.png', scissor:'a/scissor.png',
   kiss1:'a/menu/kiss1.png', kiss2:'a/menu/kiss2.png', kiss3:'a/menu/kiss3.png',
   walk1:'a/mon/walk1.png', walk2:'a/mon/walk2.png', attack:'a/mon/attack.png',
   drink:'a/mon/drink.png', smoke:'a/mon/smoke.gif',
@@ -136,6 +136,9 @@ let enemies = [];
 let projectiles = [];
 let pickups = [];
 let particles = [];
+let deathAnims = [];   // 敵人切半紙片動畫
+let hitFx = [];        // BOSS 命中玩家「快速斬」特效
+let slashHits = [];    // 玩家白弧斬擊命中敵人特效
 let boss = null;
 let bossSpawned = false;
 let bossIntroStart = 0;
@@ -152,49 +155,31 @@ let dyingStart = 0;
 let redFade = 0;
 
 const SKILLS = {
-  range:  { name:'靈氣放大',    desc:'剪刀靈氣範圍 +20%', max:5, apply:()=>{ player.slashRange *= 1.20; } },
-  speed:  { name:'揮舞如風',    desc:'攻速 +15%',         max:5, apply:()=>{ player.attackInterval *= 0.85; } },
-  dmg:    { name:'鋒銳之刃',    desc:'靈氣傷害 +2',       max:5, apply:()=>{ player.slashDamage += 2; } },
-  move:   { name:'走位風神',    desc:'移動速度 +12%',     max:3, apply:()=>{ player.moveSpeed *= 1.12; } },
-  hp:     { name:'體質強化',    desc:'血上限 +1 並回滿',  max:2, apply:()=>{ player.maxHp += 1; player.hp = player.maxHp; } },
-  ammo:   { name:'奧義罐包',    desc:'奧義罐上限 +1',     max:2, apply:()=>{ player.maxCanisters += 1; } },
-  bb:     { name:'波貝貝 繞圈', desc:'繞體盾彈開敵人；升級 +範圍 +大小', max:3,
+  range:  { name:'靈氣放大',    desc:'剪刀靈氣範圍 +20%', max:5, weight:1, apply:()=>{ player.slashRange *= 1.20; } },
+  speed:  { name:'揮舞如風',    desc:'攻速 +15%',         max:5, weight:1, apply:()=>{ player.attackInterval *= 0.85; } },
+  dmg:    { name:'鋒銳之刃',    desc:'靈氣傷害 +2',       max:5, weight:1, apply:()=>{ player.slashDamage += 2; } },
+  move:   { name:'走位風神',    desc:'移動速度 +12%',     max:3, weight:1, apply:()=>{ player.moveSpeed *= 1.12; } },
+  hp:     { name:'體質強化',    desc:'血上限 +1 並回滿',  max:2, weight:1, apply:()=>{ player.maxHp += 1; player.hp = player.maxHp; } },
+  ammo:   { name:'奧義罐包',    desc:'奧義罐上限 +1',     max:2, weight:1, apply:()=>{ player.maxCanisters += 1; } },
+  bb:     { name:'波貝貝 繞圈', desc:'繞體盾彈開敵人；升級 +範圍 +大小', max:3, weight:3,
             apply: () => {
               const have = player.skills.bb || 0;
-              if (have === 0) {
-                player.bbOrbR = 110;
-                player.bbSize = 180;
-              } else {
-                player.bbOrbR *= 1.30;
-                player.bbSize *= 1.20;
-              }
+              if (have === 0) { player.bbOrbR = 110; player.bbSize = 180; }
+              else { player.bbOrbR *= 1.30; player.bbSize *= 1.20; }
             } },
-  kid:    { name:'親親子 靈氣', desc:'貼身隨從，自動向敵人射靈氣', max:3,
+  kid:    { name:'親親子 靈氣', desc:'貼身隨從，自動向敵人射靈氣', max:3, weight:3,
             apply: () => {
               const have = player.skills.kid || 0;
-              if (have === 0) {
-                player.kidShootInterval = 1500;
-                player.kidShootDamage = 3;
-              } else {
-                player.kidShootInterval *= 0.82;   // 升級攻速 +22%
-                player.kidShootDamage += 2;
-              }
+              if (have === 0) { player.kidShootInterval = 1500; player.kidShootDamage = 3; }
+              else { player.kidShootInterval *= 0.82; player.kidShootDamage += 2; }
             } },
-  pig:    { name:'豬鼻醬 守護', desc:'致命攻擊時擋 1 次並回滿血', max:2, apply:()=>{ player.pigCharges++; } },
+  pig:    { name:'豬鼻醬 守護', desc:'致命攻擊時擋 1 次並回滿血', max:2, weight:2, apply:()=>{ player.pigCharges++; } },
 };
 
 const LV = {
   1: {
-    enemyImg: 'lv1',
-    enemyHp: 4,
-    enemySpeed: 130,
-    enemyDmg: 1,
-    eliteRate: 0.12,          // 12% 機率刷精英
-    bossHp: 150,
-    bossSpeed: 75,
-    bossTime: 80,
-    bossSkill: 'jump',        // 跳躍黑影砸
-    bossSkillInterval: 12000, // 每 12 秒一次
+    enemyImg: 'lv1', enemyHp: 4,  enemySpeed: 130, enemyDmg: 1, eliteRate: 0.12,
+    bossHp: 150, bossSpeed: 75, bossTime: 80, bossSkill: 'jump',       bossSkillInterval: 12000,
     spawnCfg: [
       { from: 0,  to: 20, interval: 1800, count: 1 },
       { from: 20, to: 45, interval: 1250, count: 1 },
@@ -202,7 +187,49 @@ const LV = {
       { from: 70, to: 80, interval: 650,  count: 2 },
     ],
   },
+  2: {
+    enemyImg: 'lv2', enemyHp: 6,  enemySpeed: 145, enemyDmg: 1, eliteRate: 0.15,
+    bossHp: 240, bossSpeed: 80, bossTime: 90, bossSkill: 'dash',       bossSkillInterval: 10000,
+    spawnCfg: [
+      { from: 0,  to: 22, interval: 1600, count: 1 },
+      { from: 22, to: 50, interval: 1100, count: 1 },
+      { from: 50, to: 75, interval: 800,  count: 2 },
+      { from: 75, to: 90, interval: 550,  count: 2 },
+    ],
+  },
+  3: {
+    enemyImg: 'lv3', enemyHp: 9,  enemySpeed: 155, enemyDmg: 1, eliteRate: 0.20,
+    bossHp: 380, bossSpeed: 80, bossTime: 100, bossSkill: 'summon',    bossSkillInterval: 15000,
+    spawnCfg: [
+      { from: 0,  to: 25, interval: 1500, count: 1 },
+      { from: 25, to: 55, interval: 1050, count: 1 },
+      { from: 55, to: 85, interval: 750,  count: 2 },
+      { from: 85, to: 100, interval: 500, count: 2 },
+    ],
+  },
+  4: {
+    enemyImg: 'lv4', enemyHp: 13, enemySpeed: 165, enemyDmg: 2, eliteRate: 0.22,
+    bossHp: 560, bossSpeed: 85, bossTime: 110, bossSkill: 'tripleJump',bossSkillInterval: 14000,
+    spawnCfg: [
+      { from: 0,  to: 28, interval: 1400, count: 1 },
+      { from: 28, to: 60, interval: 950,  count: 2 },
+      { from: 60, to: 95, interval: 700,  count: 2 },
+      { from: 95, to: 110, interval: 450, count: 3 },
+    ],
+  },
+  5: {
+    enemyImg: 'lv5', enemyHp: 18, enemySpeed: 180, enemyDmg: 2, eliteRate: 0.28,
+    bossHp: 820, bossSpeed: 90, bossTime: 120, bossSkill: 'mixed',     bossSkillInterval: 9000,
+    spawnCfg: [
+      { from: 0,   to: 30,  interval: 1200, count: 2 },
+      { from: 30,  to: 70,  interval: 850,  count: 2 },
+      { from: 70,  to: 100, interval: 600,  count: 3 },
+      { from: 100, to: 120, interval: 400,  count: 3 },
+    ],
+  },
 };
+
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 let currentLevel = 1;
 
 const minionState = {
@@ -424,7 +451,25 @@ function updateEnemies(dt, now) {
 // Boss AI — state machine
 // ============================================================================
 function bossVulnerable() {
-  return boss && (boss.ai === 'chase' || boss.ai === 'falling');
+  return boss && (boss.ai === 'chase' || boss.ai === 'dashWarn' || boss.ai === 'dashing');
+}
+
+function drawDashWarning() {
+  if (!boss || boss.ai !== 'dashWarn') return;
+  const now = performance.now();
+  const pulse = 0.5 + Math.abs(Math.sin(now / 70)) * 0.5;
+  ctx.save();
+  ctx.strokeStyle = `rgba(255, 40, 40, ${pulse})`;
+  ctx.lineWidth = 22;
+  ctx.lineCap = 'round';
+  ctx.setLineDash([32, 16]);
+  ctx.lineDashOffset = -(now / 30);
+  ctx.beginPath();
+  ctx.moveTo(boss.dashFromX, boss.dashFromY);
+  ctx.lineTo(boss.dashEndX, boss.dashEndY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
 }
 function allTargets() {
   return bossVulnerable() ? enemies.concat(boss) : enemies;
@@ -452,53 +497,85 @@ function updateBoss(dt, now) {
       break;
     }
     case 'jumping': {
-      // 0 → 400ms 飛上天（離畫面）
       const t = (now - boss.jumpStart) / 400;
       if (t >= 1) {
-        // 進入黑影警告階段
         boss.ai = 'shadow';
         boss.shadowStart = now;
-        // 鎖定玩家當下位置
-        boss.shadows = [{
-          x: player.x, y: player.y,
-          r: 130,
-          fallAt: now + 2000,
-        }];
-      } else {
-        // 視覺：boss 移到畫面外（y 往上）
-        boss.jumpY = boss.jumpStartY * (1 - t) + (-300) * t;
+        const count = boss.shadowCount || 1;
+        boss.shadows = [];
+        for (let i = 0; i < count; i++) {
+          const off = i === 0 ? { x: 0, y: 0 } : { x: (Math.random() - 0.5) * 200, y: (Math.random() - 0.5) * 140 };
+          boss.shadows.push({
+            x: clamp(player.x + off.x, 80, W - 80),
+            y: clamp(player.y + off.y, 80, H - 80),
+            r: 130,
+            fallAt: now + 2000 + i * 550,
+            fell: false,
+          });
+        }
       }
       break;
     }
     case 'shadow': {
-      // 黑影警告 2s，時間到 → falling
-      const sh = boss.shadows[0];
-      if (!sh) { boss.ai = 'chase'; break; }
-      if (now >= sh.fallAt) {
-        boss.ai = 'falling';
-        boss.fallStart = now;
-        boss.fallTarget = { x: sh.x, y: sh.y, r: sh.r };
+      if (!boss.shadows || !boss.shadows.length) { boss.ai = 'chase'; break; }
+      for (const sh of boss.shadows) {
+        if (!sh.fell && now >= sh.fallAt) {
+          const d = Math.hypot(player.x - sh.x, player.y - sh.y);
+          if (d < sh.r && now > player.iframeUntil) {
+            hurtPlayer(3, now);
+            spawnHitFx(player.x, player.y);
+          }
+          triggerShake(14, 400);
+          spawnParticles(sh.x, sh.y, 40, '#ffcc33');
+          playSfx('dead', 0.5);
+          sh.fell = true;
+          sh.fellAt = now;
+        }
+      }
+      if (boss.shadows.every(sh => sh.fell)) {
+        const last = boss.shadows[boss.shadows.length - 1];
+        if (now - last.fellAt > 200) {
+          boss.x = last.x; boss.y = last.y;
+          boss.shadows = [];
+          boss.ai = 'chase';
+          boss.lastSkillAt = now;
+        }
       }
       break;
     }
     case 'falling': {
-      const t = (now - boss.fallStart) / 180;   // 0.18s 快速下墜
+      // 保留此 case 以免殘留狀態（jumping/shadow 已取代）
+      boss.ai = 'chase';
+      break;
+    }
+    case 'dashWarn': {
+      if (now > boss.dashWarnUntil) {
+        boss.ai = 'dashing';
+        boss.dashExecStart = now;
+      }
+      break;
+    }
+    case 'dashing': {
+      const t = (now - boss.dashExecStart) / 420;
       if (t >= 1) {
-        // 落地
-        const tgt = boss.fallTarget;
-        boss.x = tgt.x; boss.y = tgt.y;
-        // 傷害結算：玩家在圓內 → 扣 3 血
-        const d = Math.hypot(player.x - tgt.x, player.y - tgt.y);
-        if (d < tgt.r && now > player.iframeUntil) {
-          hurtPlayer(3, now);
-        }
-        // 螢幕震動
-        triggerShake(14, 400);
-        spawnParticles(tgt.x, tgt.y, 40, '#ffcc33');
-        playSfx('dead', 0.55);
-        boss.shadows = [];
         boss.ai = 'chase';
-        boss.lastSkillAt = now;   // 重置冷卻從落地算
+        boss.lastSkillAt = now;
+      } else {
+        boss.x = boss.dashFromX + (boss.dashEndX - boss.dashFromX) * t;
+        boss.y = boss.dashFromY + (boss.dashEndY - boss.dashFromY) * t;
+        const d = Math.hypot(player.x - boss.x, player.y - boss.y);
+        if (d < boss.r + player.r && now > player.iframeUntil) {
+          hurtPlayer(2, now);
+          spawnHitFx(player.x, player.y);
+        }
+      }
+      break;
+    }
+    case 'summoning': {
+      const alive = enemies.some(e => boss.summonIds && boss.summonIds.includes(e.id));
+      if (!alive || now - boss.summonStart > 20000) {
+        boss.ai = 'chase';
+        boss.lastSkillAt = now;
       }
       break;
     }
@@ -506,12 +583,68 @@ function updateBoss(dt, now) {
 }
 
 function beginBossSkill(now, skill) {
+  if (skill === 'mixed') {
+    const pool = ['jump', 'dash', 'summon', 'tripleJump'];
+    skill = pool[Math.floor(Math.random() * pool.length)];
+  }
   if (skill === 'jump') {
     boss.ai = 'jumping';
     boss.jumpStart = now;
     boss.jumpStartY = boss.y;
+    boss.shadowCount = 1;
+  } else if (skill === 'tripleJump') {
+    boss.ai = 'jumping';
+    boss.jumpStart = now;
+    boss.jumpStartY = boss.y;
+    boss.shadowCount = 3;
+  } else if (skill === 'dash') {
+    beginDash(now);
+  } else if (skill === 'summon') {
+    beginSummon(now);
   }
-  // 之後可擴 dash / summon / tripleJump / mixed
+}
+
+function beginDash(now) {
+  // 先把 boss 瞬移到玩家反方向邊緣附近
+  const dx = boss.x - player.x, dy = boss.y - player.y;
+  const d = Math.hypot(dx, dy) || 1;
+  boss.x = clamp(player.x + (dx/d) * 650, 80, W - 80);
+  boss.y = clamp(player.y + (dy/d) * 650, 80, H - 80);
+  // 記錄衝刺線：boss → 玩家當下位置，延伸到畫面另一端
+  const tdx = player.x - boss.x, tdy = player.y - boss.y;
+  const td = Math.hypot(tdx, tdy) || 1;
+  boss.dashFromX = boss.x;
+  boss.dashFromY = boss.y;
+  boss.dashEndX = boss.x + (tdx/td) * 2200;
+  boss.dashEndY = boss.y + (tdy/td) * 2200;
+  boss.dashStart = now;
+  boss.dashWarnUntil = now + 1500;
+  boss.ai = 'dashWarn';
+}
+
+function beginSummon(now) {
+  boss.ai = 'summoning';
+  boss.summonStart = now;
+  boss.summonIds = [];
+  const cfg = LV[currentLevel];
+  const img = imgs[cfg.enemyImg];
+  for (let i = 0; i < 3; i++) {
+    const angle = (Math.PI * 2 / 3) * i + Math.random() * 0.4;
+    const dist = 280;
+    const ex = clamp(player.x + Math.cos(angle) * dist, 60, W - 60);
+    const ey = clamp(player.y + Math.sin(angle) * dist, 80, H - 60);
+    const e = {
+      id: ++entityId, x: ex, y: ey,
+      hp: Math.ceil(cfg.enemyHp * 2.5),
+      speed: cfg.enemySpeed * 1.15,
+      r: 38, img, w: 84, h: 84,
+      dmg: Math.ceil(cfg.enemyDmg * 1.5),
+      hitFlash: 0, isElite: true, xpDrop: 3,
+      summonedBy: boss.id,
+    };
+    enemies.push(e);
+    boss.summonIds.push(e.id);
+  }
 }
 
 function drawShadows() {
@@ -591,7 +724,6 @@ function nearestEnemy() {
 }
 
 function performSlash(now) {
-  // 近戰 AOE — 以玩家為中心的圓範圍，立即對範圍內所有敵人造成傷害
   const R = player.slashRange;
   const all = allTargets();
   let anyHit = false;
@@ -600,15 +732,57 @@ function performSlash(now) {
     if (d < R + e.r) {
       e.hp -= player.slashDamage;
       e.hitFlash = 160;
-      spawnParticles(e.x, e.y, 6, '#ffb0b0');
+      spawnParticles(e.x, e.y, 6, '#ffe8c8');
+      // 每個被打到的敵人身上各加一個白弧斬擊特效
+      const aimAngle = Math.atan2(e.y - player.y, e.x - player.x);
+      slashHits.push({
+        x: e.x, y: e.y,
+        angle: aimAngle + (Math.random() - 0.5) * 0.6,
+        start: now,
+        size: Math.max(55, Math.min(110, e.r * 2.2)),
+      });
       if (e.hp <= 0 && e !== boss) onEnemyKill(e);
       anyHit = true;
     }
   }
-  // 特效持續時間
-  player.slashVisualUntil = now + 380;
-  player.slashVisualAngle = (Math.random() - 0.5) * 0.5;
-  playSfx('cut', anyHit ? 0.8 : 0.4);
+  playSfx('cut', anyHit ? 0.8 : 0.35);
+}
+
+function drawSlashHits() {
+  const now = performance.now();
+  const DUR = 300;
+  for (const h of slashHits) {
+    const t = (now - h.start) / DUR;
+    if (t >= 1) continue;
+    const alpha = t < 0.5 ? 1 : Math.max(0, 1 - (t - 0.5) / 0.5);
+    const R = h.size * (0.85 + t * 0.45);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(h.x, h.y);
+    ctx.rotate(h.angle);
+    ctx.lineCap = 'round';
+    ctx.shadowColor = '#ffffff';
+    ctx.shadowBlur = 28;
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 18;
+    ctx.beginPath();
+    ctx.arc(0, 0, R, -Math.PI*0.7, Math.PI*0.7);
+    ctx.stroke();
+    ctx.shadowBlur = 14;
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.arc(0, 0, R, -Math.PI*0.7, Math.PI*0.7);
+    ctx.stroke();
+    ctx.shadowBlur = 4;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 0, R, -Math.PI*0.7, Math.PI*0.7);
+    ctx.stroke();
+    ctx.restore();
+  }
+  slashHits = slashHits.filter(h => (now - h.start) < DUR);
 }
 
 function updateProjectiles(dt) {
@@ -635,43 +809,25 @@ function updateProjectiles(dt) {
     p.life > 0 && p.x > -120 && p.x < W + 120 && p.y > -120 && p.y < H + 120);
 }
 
-function drawSlashVisual() {
-  const now = performance.now();
-  if (now >= player.slashVisualUntil) return;
-  const img = imgs.boom;
-  if (!img || !img.complete || !img.naturalWidth) return;
-  const remain = player.slashVisualUntil - now;
-  const total = 380;
-  const t = 1 - remain / total;       // 0 → 1
-  const alpha = t < 0.55 ? 1 : Math.max(0, 1 - (t - 0.55) / 0.45);
-  const scale = 0.7 + t * 0.55;
-  const targetW = player.slashRange * 2.4 * scale;
-  const targetH = targetW;  // boom 是正方形
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.shadowColor = '#ffa83a';
-  ctx.shadowBlur = 22;
-  ctx.translate(player.x, player.y);
-  ctx.rotate(player.slashVisualAngle + t * 0.6);   // 爆炸圖輕微旋轉
-  ctx.drawImage(img, -targetW/2, -targetH/2, targetW, targetH);
-  ctx.restore();
-}
+// drawSlashVisual 已移除 — 改用 drawSlashHits 畫在被打到的敵人身上
 
 function drawProjectile(p) {
-  const img = imgs.boom;
+  const isKid = p.source === 'kid';
+  const img = isKid ? imgs.scissor : imgs.boom;
   if (img && img.complete && img.naturalWidth) {
-    const size = 58;
+    const size = isKid ? 72 : 58;
     ctx.save();
     ctx.translate(p.x, p.y);
-    ctx.rotate(performance.now() / 180 + (p.angle || 0));  // 自轉
-    ctx.shadowColor = '#ffb04a';
+    // 親親子剪刀：刀尖原圖朝下 (π/2)，rotate(angle - π/2) 讓刀尖對準飛行方向
+    const rot = isKid ? ((p.angle || 0) - Math.PI/2) : (performance.now() / 180 + (p.angle || 0));
+    ctx.rotate(rot);
+    ctx.shadowColor = isKid ? '#ffb3d1' : '#ffb04a';
     ctx.shadowBlur = 18;
     ctx.drawImage(img, -size/2, -size/2, size, size);
     ctx.restore();
   } else {
     ctx.save();
     ctx.translate(p.x, p.y);
-    ctx.rotate(p.angle || 0);
     ctx.fillStyle = p.color || '#ffb3d1';
     ctx.beginPath();
     ctx.arc(0, 0, 22, 0, Math.PI*2);
@@ -1038,6 +1194,72 @@ function onEnemyKill(e) {
   else if (r < 0.12) dropMagnet(e.x, e.y);
   else               dropXp(e.x, e.y, e.xpDrop || 1);
   spawnParticles(e.x, e.y, 8, '#ffee7a');
+  // 紙片切半動畫
+  deathAnims.push({
+    x: e.x, y: e.y, w: e.w, h: e.h,
+    img: e.img, isElite: e.isElite,
+    start: performance.now(),
+  });
+}
+
+function drawDeathAnims() {
+  const now = performance.now();
+  const DUR = 700;
+  for (const a of deathAnims) {
+    const t = (now - a.start) / DUR;
+    if (t >= 1) continue;
+    const alpha = 1 - t;
+    const img = a.img;
+    if (!img || !img.naturalWidth) continue;
+    const nw = img.naturalWidth, nh = img.naturalHeight;
+    const halfH = Math.floor(nh / 2);
+    const eased = t * (2 - t);  // easeOut
+    ctx.save();
+    if (a.isElite) ctx.filter = 'hue-rotate(35deg) saturate(2.1) brightness(1.15)';
+    ctx.globalAlpha = alpha;
+    // 上半：向左上滑 + 逆時針微旋
+    ctx.save();
+    ctx.translate(a.x - eased * 12, a.y - eased * 26);
+    ctx.rotate(-eased * 0.35);
+    ctx.drawImage(img, 0, 0, nw, halfH,
+                  -a.w/2, -a.h/2, a.w, a.h/2);
+    ctx.restore();
+    // 下半：向右下滑 + 順時針微旋
+    ctx.save();
+    ctx.translate(a.x + eased * 10, a.y + eased * 38);
+    ctx.rotate(eased * 0.35);
+    ctx.drawImage(img, 0, halfH, nw, nh - halfH,
+                  -a.w/2, 0, a.w, a.h/2);
+    ctx.restore();
+    ctx.restore();
+  }
+  deathAnims = deathAnims.filter(a => (now - a.start) < DUR);
+}
+
+function spawnHitFx(x, y) {
+  hitFx.push({ x, y, start: performance.now(), flip: Math.random() < 0.5 });
+}
+
+function drawHitFx() {
+  const now = performance.now();
+  const DUR = 320;
+  const img = imgs.hit;
+  if (!img || !img.naturalWidth) return;
+  for (const f of hitFx) {
+    const t = (now - f.start) / DUR;
+    if (t >= 1) continue;
+    const alpha = t < 0.4 ? 1 : 1 - (t - 0.4) / 0.6;
+    const scale = 0.6 + t * 0.7;
+    const w = 260 * scale;
+    const h = w * (img.naturalHeight / img.naturalWidth);
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, alpha);
+    ctx.translate(f.x, f.y);
+    if (f.flip) ctx.scale(-1, 1);
+    ctx.drawImage(img, -w/2, -h/2, w, h);
+    ctx.restore();
+  }
+  hitFx = hitFx.filter(f => (now - f.start) < DUR);
 }
 
 function hurtPlayer(dmg, now) {
@@ -1070,15 +1292,35 @@ function xpCurve(lv) {
 
 function triggerLevelUp() {
   state = 'levelup';
-  const pool = [];
-  for (const k in SKILLS) {
-    const have = player.skills[k] || 0;
-    if (have < SKILLS[k].max) pool.push(k);
-  }
-  pool.sort(() => Math.random() - 0.5);
-  levelUpChoices = pool.slice(0, 3);
+  levelUpChoices = pickWeightedChoices(3);
   if (bgm) bgm.volume = 0.1;
   playSfx('lvup', 0.9);
+}
+
+function pickWeightedChoices(n) {
+  // 依每個技能的 weight 建池（同 key 重複 weight 次），然後抽 n 個不重複 key
+  const bucket = [];
+  for (const k in SKILLS) {
+    const have = player.skills[k] || 0;
+    if (have < SKILLS[k].max) {
+      const w = SKILLS[k].weight || 1;
+      for (let i = 0; i < w; i++) bucket.push(k);
+    }
+  }
+  const picked = [];
+  const seen = new Set();
+  while (picked.length < n && bucket.length > 0) {
+    const idx = Math.floor(Math.random() * bucket.length);
+    const k = bucket[idx];
+    if (!seen.has(k)) {
+      picked.push(k);
+      seen.add(k);
+    }
+    for (let i = bucket.length - 1; i >= 0; i--) {
+      if (bucket[i] === k) bucket.splice(i, 1);
+    }
+  }
+  return picked;
 }
 
 function chooseSkill(k) {
@@ -1101,37 +1343,46 @@ function chooseSkill(k) {
 // Ult
 // ============================================================================
 let ultExplosions = [];   // [{x,y,isBoss}]
+let ultPhase = null;      // 'intro' | 'freeze' | 'boom'
+let ultPhaseStart = 0;
+const ULT_INTRO_MS = 3600;   // 對齊 ult.aac 時長
+const ULT_FREEZE_MS = 1000;
+const ULT_BOOM_MS = 800;
 
 function tryUlt() {
   if (player.canisters <= 0) return;
   player.canisters--;
   state = 'ult';
   ultStartTime = performance.now();
-  // 記錄當下每個敵人位置 — 爆炸期間用
+  ultPhase = 'intro';
+  ultPhaseStart = ultStartTime;
+  // 鎖定此刻所有敵人位置 — 之後爆炸用
   ultExplosions = [];
   for (const e of enemies) ultExplosions.push({ x: e.x, y: e.y });
   if (boss && bossVulnerable()) ultExplosions.push({ x: boss.x, y: boss.y, isBoss: true });
+  // Phase 1：顯示 Eason 照片 + 播音效
+  document.getElementById('ult-img').style.display = 'block';
   playSfx('ult', 1.0);
   if (bgm) bgm.volume = 0.05;
 }
 
 function drawUltEffect() {
+  if (ultPhase === 'intro') return;  // Phase1：ult-img 全螢幕蓋住
   const now = performance.now();
-  const t = now - ultStartTime;
-  if (t < 1000) {
-    // 凍結期：畫面漸強光暈
-    const k = Math.sin((t / 1000) * Math.PI);   // 0 → 1 → 0
+  const t = now - ultPhaseStart;
+  if (ultPhase === 'freeze') {
+    // Phase2：畫面凍結，金色光暈脈動 1s
+    const k = Math.sin((t / ULT_FREEZE_MS) * Math.PI);
     ctx.fillStyle = `rgba(255, 240, 140, ${k * 0.45})`;
     ctx.fillRect(0, 0, W, H);
-    // 中心光環（玩家位置）
     const g = ctx.createRadialGradient(player.x, player.y, 20, player.x, player.y, 600 * k);
     g.addColorStop(0, `rgba(255, 230, 100, ${0.7 * k})`);
     g.addColorStop(1, 'rgba(255, 230, 100, 0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
-  } else if (t < 1800) {
-    // 爆炸期 800ms：每個敵人位置畫 boom.png
-    const et = (t - 1000) / 800;
+  } else if (ultPhase === 'boom') {
+    // Phase3：每個敵人位置爆炸圖 0.8s
+    const et = t / ULT_BOOM_MS;
     const img = imgs.boom;
     if (!img || !img.complete || !img.naturalWidth) return;
     for (const ex of ultExplosions) {
@@ -1159,6 +1410,8 @@ function finishUltScreen() {
     boss.hitFlash = 300;
   }
   ultExplosions = [];
+  ultPhase = null;
+  document.getElementById('ult-img').style.display = 'none';
   triggerShake(10, 300);
   state = 'play';
   if (bgm) bgm.volume = 0.3;
@@ -1440,28 +1693,18 @@ function drawGame() {
   drawFlags();
   drawParticles();
   for (const p of pickups) drawPickup(p);
+  drawDeathAnims();
   for (const e of enemies) drawEnemy(e);
-  // BOSS 只在 chase/falling 時顯示在場上
-  if (boss && (boss.ai === 'chase' || boss.ai === 'falling')) {
-    ctx.save();
-    if (boss.ai === 'falling') {
-      // 下墜中畫在 shadow 位置上方，由上往下
-      const t = Math.min(1, (now - boss.fallStart) / 180);
-      const tgt = boss.fallTarget;
-      const fx = tgt.x;
-      const fy = tgt.y - (1 - t) * 900;   // 從上方 900px 落下
-      const save = { x: boss.x, y: boss.y };
-      boss.x = fx; boss.y = fy;
-      drawEnemy(boss);
-      boss.x = save.x; boss.y = save.y;
-    } else {
-      drawEnemy(boss);
-    }
+  // BOSS 視覺：只在 chase / dashWarn / dashing 時在場上顯示（jumping/shadow/summoning 隱藏）
+  if (boss && (boss.ai === 'chase' || boss.ai === 'dashWarn' || boss.ai === 'dashing')) {
+    drawEnemy(boss);
   }
   drawShadows();
+  drawDashWarning();
   for (const p of projectiles) drawProjectile(p);
   drawPlayer();
-  drawSlashVisual();
+  drawSlashHits();
+  drawHitFx();
   if (state === 'ult') drawUltEffect();
   ctx.restore();
   // HUD 不受 shake 影響
@@ -1545,7 +1788,9 @@ function resetGame() {
   player.animUntil = 0;
   player.animType = null;
   enemies = []; projectiles = []; pickups = []; particles = [];
+  deathAnims = []; hitFx = []; slashHits = []; ultExplosions = [];
   boss = null; bossSpawned = false;
+  ultPhase = null;
   gameStartTime = performance.now();
   elapsed = 0;
   lastSpawn = 0;
@@ -1589,7 +1834,17 @@ function mainLoop(now) {
     updateDying(dt, pnow);
     updateParticles(dt);
   } else if (state === 'ult') {
-    if (pnow - ultStartTime > 1800) finishUltScreen();
+    const pt = pnow - ultPhaseStart;
+    if (ultPhase === 'intro' && pt >= ULT_INTRO_MS) {
+      document.getElementById('ult-img').style.display = 'none';
+      ultPhase = 'freeze';
+      ultPhaseStart = pnow;
+    } else if (ultPhase === 'freeze' && pt >= ULT_FREEZE_MS) {
+      ultPhase = 'boom';
+      ultPhaseStart = pnow;
+    } else if (ultPhase === 'boom' && pt >= ULT_BOOM_MS) {
+      finishUltScreen();
+    }
   } else if (state === 'levelup') {
     gameStartTime += dt;       // freeze elapsed
     lastSpawn += dt;
